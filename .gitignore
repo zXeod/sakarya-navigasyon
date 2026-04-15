@@ -13,3 +13,6 @@ data/sakarya_graph.pkl
 .DS_Store
 Thumbs.db
 *.log
+.claude/
+core/*.tmp.*
+profiles/*.tmp.*
