@@ -1,0 +1,466 @@
+"""
+Akıllı navigasyon rotası planlama motoru
+Ağırlıklı Dijkstra algoritması + araç profilleri
+"""
+
+from typing import List, Tuple, Dict, Optional
+from collections import defaultdict
+import heapq
+import math
+
+import networkx as nx
+import osmnx as ox
+from shapely.geometry import Point
+
+from profiles.vehicle_profiles import (
+    get_vehicle_profile,
+    get_highway_cost,
+    get_surface_cost,
+    get_traffic_factor,
+)
+
+# (off_peak_kmh, rush_hour_kmh) — araç türü: binek için taban değerler
+HIGHWAY_SPEEDS: Dict[str, tuple] = {
+    'motorway':       (115, 85),
+    'motorway_link':  (90,  65),
+    'trunk':          (90,  70),
+    'trunk_link':     (75,  55),
+    'primary':        (70,  50),
+    'primary_link':   (60,  45),
+    'secondary':      (60,  45),
+    'secondary_link': (50,  38),
+    'tertiary':       (50,  35),
+    'tertiary_link':  (45,  30),
+    'residential':    (40,  30),
+    'living_street':  (20,  15),
+    'unclassified':   (45,  35),
+    'service':        (25,  20),
+    'track':          (25,  20),
+}
+
+# Araç tipi hız çarpanları (binek=1.0 baz)
+VEHICLE_SPEED_FACTORS: Dict[str, float] = {
+    'binek':      1.00,
+    'kamyon':     0.72,   # Ağır araç, otobanda 90 sınırı
+    'motosiklet': 1.08,   # Şehirde daha akıcı filtre yapabilir
+    'bisiklet':   0.22,   # Sabit ~15-18 km/h
+    'modifiye':   0.90,   # SUV/arazi daha ağır
+}
+
+
+class SmartRouter:
+    """Akıllı navigasyon motoru"""
+    
+    def __init__(self, graph: nx.MultiDiGraph, vehicle_type: str = 'binek', hour: int = 12):
+        """
+        Router başlatma
+        
+        Args:
+            graph: OSMnx ağı (MultiDiGraph)
+            vehicle_type: Araç tipi ('binek', 'kamyon', 'motosiklet', 'bisiklet', 'modifiye')
+            hour: Saat (0-23) - trafik hesaplamalarında kullanılır
+        """
+        self.graph = graph
+        self.vehicle_type = vehicle_type
+        self.hour = hour
+        
+        # Profil ve trafik çarpanını önceden yükle
+        self.profile = get_vehicle_profile(vehicle_type)
+        self.traffic_factor = get_traffic_factor(vehicle_type, hour)
+    
+    def calculate_edge_weight(self, u: int, v: int, key: int = 0) -> float:
+        """
+        Kenar ağırlığını hesapla (maliyet = mesafe × yüzey cezası × trafik × highway cezası)
+        
+        Args:
+            u, v: Düğüm ID'leri
+            key: Kenar anahtarı (MultiDiGraph için)
+        
+        Returns:
+            Kenar ağırlığı (metre)
+        """
+        try:
+            edge_data = self.graph.edges[u, v, key]
+            
+            # Temel maliyet: mesafe (metre)
+            distance = edge_data.get('length', 50)  # 50m varsayılan
+            
+            # Highway tipi cezası
+            highway = edge_data.get('highway', 'unclassified')
+            if isinstance(highway, list):
+                highway = highway[0]
+            highway_cost = get_highway_cost(self.vehicle_type, highway)
+            
+            # Surface tipi cezası (varsa)
+            surface = edge_data.get('surface', None)
+            if surface:
+                surface_cost = get_surface_cost(self.vehicle_type, surface)
+            else:
+                surface_cost = 1.0
+            
+            # Toplam ağırlık = mesafe × highway cezası × surface cezası × trafik çarpanı
+            weight = distance * highway_cost * surface_cost * self.traffic_factor
+            
+            return weight
+            
+        except (KeyError, TypeError):
+            # Kenar yoksa veya veri eksik ise yüksek maliyet
+            return float('inf')
+    
+    def find_nearest_node(self, lat: float, lon: float) -> int:
+        """
+        Belirtilen koordinata en yakın ağ düğümünü bul
+        
+        Args:
+            lat: Enlem
+            lon: Boylam
+        
+        Returns:
+            Düğüm ID'si
+        """
+        # OSMnx'in nearest_nodes fonksiyonunu kullan
+        nearest = ox.nearest_nodes(self.graph, lon, lat)
+        return nearest
+    
+    def dijkstra_route(self, start_node: int, end_node: int) -> Tuple[List[int], float]:
+        """
+        Ağırlıklı Dijkstra algoritması ile optimal rota bul
+        
+        Args:
+            start_node: Başlangıç düğümü ID
+            end_node: Hedef düğümü ID
+        
+        Returns:
+            (Rota düğüm listesi, Toplam maliyet) tuple'ı
+        """
+        if start_node not in self.graph or end_node not in self.graph:
+            raise ValueError(f"Düğüm ağda bulunamadı")
+        
+        # Dijkstra algoritması
+        distances = {node: float('inf') for node in self.graph.nodes()}
+        distances[start_node] = 0
+        
+        previous = {node: None for node in self.graph.nodes()}
+        
+        # Priority queue: (distance, node)
+        pq = [(0, start_node)]
+        visited = set()
+        
+        while pq:
+            current_dist, current = heapq.heappop(pq)
+            
+            if current in visited:
+                continue
+            
+            visited.add(current)
+            
+            # Hedefe ulaştık
+            if current == end_node:
+                break
+            
+            # Komşu düğümleri kontrol et
+            for neighbor in self.graph.successors(current):
+                if neighbor in visited:
+                    continue
+                
+                # En düşük ağırlıklı kenarı al (MultiDiGraph için)
+                min_weight = float('inf')
+                for key in self.graph[current][neighbor]:
+                    weight = self.calculate_edge_weight(current, neighbor, key)
+                    min_weight = min(min_weight, weight)
+                
+                new_dist = current_dist + min_weight
+                
+                if new_dist < distances[neighbor]:
+                    distances[neighbor] = new_dist
+                    previous[neighbor] = current
+                    heapq.heappush(pq, (new_dist, neighbor))
+        
+        # Rota oluştur
+        if previous[end_node] is None and start_node != end_node:
+            raise ValueError("Başlangıç ve hedef arasında rota bulunamadı")
+        
+        route = []
+        current = end_node
+        while current is not None:
+            route.append(current)
+            current = previous[current]
+        
+        route.reverse()
+        total_cost = distances[end_node]
+        
+        return route, total_cost
+    
+    def find_route(self, start_lat: float, start_lon: float, 
+                   end_lat: float, end_lon: float) -> Dict:
+        """
+        Başlangıç ve bitiş koordinatlarından optimal rota bul
+        
+        Args:
+            start_lat, start_lon: Başlangıç koordinatları
+            end_lat, end_lon: Hedef koordinatları
+        
+        Returns:
+            Rota bilgileri içeren sözlük
+        """
+        # En yakın ağ düğümlerini bul
+        start_node = ox.nearest_nodes(self.graph, start_lon, start_lat)
+        end_node = ox.nearest_nodes(self.graph, end_lon, end_lat)
+
+        # OSMnx ile güvenilir yol-takipli rota bul
+        route_nodes = ox.shortest_path(self.graph, start_node, end_node, weight='length')
+        if route_nodes is None:
+            raise ValueError("Başlangıç ve hedef arasında rota bulunamadı")
+
+        # Araç profili ağırlıklı toplam maliyet hesapla
+        total_cost = 0.0
+        for u, v in zip(route_nodes[:-1], route_nodes[1:]):
+            if v in self.graph[u]:
+                min_w = min(
+                    self.calculate_edge_weight(u, v, k)
+                    for k in self.graph[u][v]
+                )
+                if min_w != float('inf'):
+                    total_cost += min_w
+
+        # Koordinatlar: her kenarın gerçek yol geometrisini kullan
+        # OSMnx simplify=True ile sadeleştirilmiş grafta, kavşaklar arası
+        # tüm ara noktalar edge'in 'geometry' (Shapely LineString) attribute'unda saklanır.
+        # Sadece node koordinatlarını kullanırsak PolyLine yolun dışından geçer.
+        route_coords = self._extract_route_geometry(route_nodes)
+        
+        # Yol yüzeyleri (surface) bilgisini çıkar
+        route_surfaces = self._extract_route_surfaces(route_nodes)
+        
+        # Toplam mesafe (metre cinsinden maliyet hesaplamak için)
+        total_distance = self._calculate_route_distance(route_nodes)
+        
+        # Tahmini seyahat süresi (ortalama hızlar)
+        avg_speed_kmh = self._estimate_average_speed()
+        estimated_time_minutes = (total_distance / 1000) / avg_speed_kmh * 60
+        
+        return {
+            'nodes': route_nodes,
+            'coordinates': route_coords,
+            'start_point': (start_lat, start_lon),
+            'end_point': (end_lat, end_lon),
+            'total_distance_m': total_distance,
+            'total_cost': total_cost,
+            'estimated_time_minutes': estimated_time_minutes,
+            'vehicle_type': self.vehicle_type,
+            'hour': self.hour,
+            'traffic_factor': self.traffic_factor,
+            'surfaces': route_surfaces,  # Yol yüzeyleri
+        }
+    
+    def _calculate_route_distance(self, route_nodes: List[int]) -> float:
+        """Rota üzerindeki gerçek mesafeyi hesapla (metre cinsinden)"""
+        total_distance = 0.0
+        
+        for i in range(len(route_nodes) - 1):
+            u, v = route_nodes[i], route_nodes[i + 1]
+            
+            # En kısa kenarı al (MultiDiGraph için)
+            min_distance = float('inf')
+            for key in self.graph[u][v]:
+                distance = self.graph.edges[u, v, key].get('length', 50)
+                min_distance = min(min_distance, distance)
+            
+            if min_distance != float('inf'):
+                total_distance += min_distance
+        
+        return total_distance
+    
+    def _extract_route_surfaces(self, route_nodes: List[int]) -> List[str]:
+        """
+        Rota kenarlarından yol yüzey türlerini çıkar
+        
+        Args:
+            route_nodes: Rota düğümleri listesi
+        
+        Returns:
+            Yüzey türleri listesi
+        """
+        surfaces = []
+        
+        for i in range(len(route_nodes) - 1):
+            u, v = route_nodes[i], route_nodes[i + 1]
+            
+            # En kısa kenarı al
+            best_surface = 'asphalt'  # Varsayılan
+            min_distance = float('inf')
+            
+            for key in self.graph[u][v]:
+                edge_data = self.graph.edges[u, v, key]
+                distance = edge_data.get('length', 50)
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    best_surface = edge_data.get('surface', 'asphalt')
+            
+            surfaces.append(best_surface)
+        
+        return surfaces
+    
+    def _extract_route_geometry(self, route_nodes: List[int]) -> List[Tuple[float, float]]:
+        """
+        Rota kenarlarının gerçek yol geometrisini çıkar.
+
+        OSMnx simplify=True ile sadeleştirilmiş grafta, iki kavşak arasındaki
+        tüm ara noktalar kenarın 'geometry' (Shapely LineString) attribute'unda
+        saklanır.  Sadece node koordinatı kullanmak PolyLine'ı yoldan çıkarır.
+
+        Returns:
+            (lat, lon) tuple listesi — tüm ara noktalar dahil
+        """
+        coords: List[Tuple[float, float]] = []
+
+        for i in range(len(route_nodes) - 1):
+            u, v = route_nodes[i], route_nodes[i + 1]
+
+            # MultiDiGraph: en kısa kenarlı key'i bul
+            best_key = min(
+                self.graph[u][v],
+                key=lambda k: self.graph[u][v][k].get('length', float('inf'))
+            )
+            edge_data = self.graph.edges[u, v, best_key]
+
+            if 'geometry' in edge_data:
+                # Shapely LineString — coords: [(lon, lat), ...]
+                geom_coords = list(edge_data['geometry'].coords)
+                # İlk nokta önceki segmentin son noktasıyla çakışır; atlıyoruz
+                for lon, lat in geom_coords[:-1]:
+                    coords.append((lat, lon))
+            else:
+                # Geometry yoksa düğüm koordinatını ekle
+                node_data = self.graph.nodes[u]
+                coords.append((node_data['y'], node_data['x']))
+
+        # Son düğümü ekle
+        last = self.graph.nodes[route_nodes[-1]]
+        coords.append((last['y'], last['x']))
+
+        return coords
+
+    def _estimate_average_speed(self) -> float:
+        """
+        Araç tipi ve trafik durumuna göre ortalama hız tahmini (km/h)
+        
+        Returns:
+            Ortalama hız (km/h)
+        """
+        # Temel hızlar
+        base_speeds = {
+            'binek': 50,
+            'kamyon': 60,
+            'motosiklet': 60,
+            'bisiklet': 15,
+            'modifiye': 45,
+        }
+        
+        base_speed = base_speeds.get(self.vehicle_type, 50)
+        
+        # Trafik çarpanı ile oransal hız düşüşü
+        # traffic_factor 1.0 = normal, 1.5 = yoğun trafik
+        adjusted_speed = base_speed / self.traffic_factor
+        
+        return adjusted_speed
+    
+    def set_vehicle_type(self, vehicle_type: str) -> None:
+        """Araç tipini değiştir"""
+        self.vehicle_type = vehicle_type
+        self.profile = get_vehicle_profile(vehicle_type)
+    
+    def set_hour(self, hour: int) -> None:
+        """Saati değiştir (trafik çarpanı güncelleme için)"""
+        if not 0 <= hour <= 23:
+            raise ValueError("Saat 0-23 aralığında olmalı")
+        self.hour = hour
+        self.traffic_factor = get_traffic_factor(self.vehicle_type, hour)
+
+
+class AlternativeRoutes:
+    """Alternatif rotalar bulma (Yen's algoritması)"""
+    
+    def __init__(self, router: SmartRouter):
+        """
+        AlternativeRoutes başlatma
+        
+        Args:
+            router: SmartRouter örneği
+        """
+        self.router = router
+        self.graph = router.graph
+    
+    def find_k_shortest_paths(self, start_node: int, end_node: int, 
+                              k: int = 3) -> List[Dict]:
+        """
+        En kısa k rotayı bul (Yen's algoritması)
+        
+        Args:
+            start_node: Başlangıç düğümü
+            end_node: Hedef düğümü
+            k: Kaç adet rota bulunacağı
+        
+        Returns:
+            Rota listesi (her biri maliyet bilgisi ile)
+        """
+        routes = []
+        
+        # Ilk (en kısa) rotayı bul
+        try:
+            route, cost = self.router.dijkstra_route(start_node, end_node)
+            routes.append({
+                'route': route,
+                'cost': cost,
+                'distance': self.router._calculate_route_distance(route),
+                'rank': 1,
+            })
+        except ValueError:
+            return []
+        
+        # Ek rotalar bulmak için basit yaklaşım: 
+        # Bulunan rotanın kenarlarını geçici olarak kaldır
+        for i in range(1, k):
+            if not routes:
+                break
+            
+            # Son bulunan rotanın bir kenarını kaldır
+            last_route = routes[-1]['route']
+            try:
+                idx = i - 1
+                if idx < len(last_route) - 1:
+                    u, v = last_route[idx], last_route[idx + 1]
+                    
+                    # Geçici olarak kenarı kaldır
+                    removed_edges = []
+                    for key in list(self.graph[u][v].keys()):
+                        removed_edges.append((u, v, key, self.graph[u][v][key]))
+                        self.graph.remove_edge(u, v, key)
+                    
+                    # Yeni rota bul
+                    try:
+                        route, cost = self.router.dijkstra_route(start_node, end_node)
+                        routes.append({
+                            'route': route,
+                            'cost': cost,
+                            'distance': self.router._calculate_route_distance(route),
+                            'rank': i + 1,
+                        })
+                    except ValueError:
+                        pass
+                    finally:
+                        # Kenarları geri ekle
+                        for u, v, key, data in removed_edges:
+                            self.graph.add_edge(u, v, key=key, **data)
+            except Exception:
+                break
+        
+        return routes[:k]
+
+
+# Import osmnx (bu dosyada kullanılan fonksiyonlar için)
+try:
+    import osmnx as ox
+except ImportError:
+    ox = None

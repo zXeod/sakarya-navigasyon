@@ -1,0 +1,6 @@
+Sakarya Yol Ağı Bilgisi
+==================================================
+Kapsam: Sakarya, Turkey (il sınırları)
+Düğüm Sayısı: 54655
+Kenar Sayısı: 134396
+İndir Tarihi: 2026-04-13 20:47:32

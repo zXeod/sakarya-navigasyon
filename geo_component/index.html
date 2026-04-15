@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  padding: 3px 2px 2px;
+  background: transparent;
+}
+.btn {
+  display: block; width: 100%; padding: 8px 12px;
+  font-size: 13px; cursor: pointer; border: none;
+  border-radius: 6px; color: white; font-family: inherit;
+  transition: opacity 0.15s;
+  font-weight: 500;
+}
+.btn:hover:not(:disabled) { opacity: 0.85; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+#msg { font-size: 11px; color: #888; margin-top: 5px; min-height: 14px; }
+</style>
+</head>
+<body>
+<button class="btn" id="geoBtn" onclick="getGeo()">📍 Mevcut Konumu Kullan</button>
+<div id="msg"></div>
+<script>
+// Streamlit Component Protocol v1
+// componentReady MUST use apiVersion:1, other messages must NOT include apiVersion
+function sendReady() {
+  window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
+}
+function sendHeight(h) {
+  window.parent.postMessage({ type: "streamlit:setFrameHeight", height: h }, "*");
+}
+function sendValue(val) {
+  window.parent.postMessage({ type: "streamlit:setComponentValue", value: val }, "*");
+}
+
+// Send componentReady immediately — this must arrive before Streamlit's timeout
+sendReady();
+sendHeight(62);
+
+window.addEventListener("message", function(e) {
+  if (!e.data || typeof e.data !== "object") return;
+  if (e.data.type === "streamlit:render") {
+    var color = (e.data.args || {}).color || "#1565C0";
+    document.getElementById("geoBtn").style.backgroundColor = color;
+    sendHeight(62);
+  }
+});
+
+function getGeo() {
+  var btn = document.getElementById("geoBtn");
+  var msg = document.getElementById("msg");
+  btn.disabled = true;
+  msg.style.color = "#888";
+  msg.textContent = "⏳ Konum alınıyor...";
+
+  if (!navigator.geolocation) {
+    msg.style.color = "#e53935";
+    msg.textContent = "❌ Tarayıcınız konum desteklemiyor";
+    btn.disabled = false;
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    function(pos) {
+      var lat = parseFloat(pos.coords.latitude.toFixed(6));
+      var lon = parseFloat(pos.coords.longitude.toFixed(6));
+      msg.style.color = "#2e7d32";
+      msg.textContent = "✅ " + lat + ", " + lon;
+      sendValue({ lat: lat, lon: lon });
+      btn.disabled = false;
+    },
+    function(err) {
+      var m = {
+        1: "❌ Konum izni reddedildi",
+        2: "❌ Konum sinyal alınamadı",
+        3: "❌ Zaman aşımı — tekrar dene"
+      };
+      msg.style.color = "#e53935";
+      msg.textContent = m[err.code] || ("❌ " + err.message);
+      btn.disabled = false;
+    },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+  );
+}
+</script>
+</body>
+</html>

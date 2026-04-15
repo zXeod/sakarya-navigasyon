@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+cache/
+.streamlit/cache/
+data/sakarya_graph.pkl
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+*.log
