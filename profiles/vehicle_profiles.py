@@ -85,22 +85,27 @@ VEHICLE_CATEGORIES = {
 MODIFICATIONS = {
     'lowering': {
         'name': 'Alçaltma / Lowering',
+        'emoji': '⬇️',
         'effect': 'Yüksek kaliteli yollarda hız artışı, kötü yollarda risk ↑'
     },
     'lift': {
         'name': 'Yükseltme / Lift Kit',
+        'emoji': '⬆️',
         'effect': 'Arazi yollarında başarı ↑, stabilite ↓'
     },
     'offset': {
         'name': 'Geniş Lastik / Offset',
+        'emoji': '🔄',
         'effect': 'Grip ↑, yakıt tüketimi ↑'
     },
     'bodykit': {
         'name': 'Body Kit',
+        'emoji': '✨',
         'effect': 'Estetik, havalı görünüm (teknik etki yok)'
     },
     'cargo': {
         'name': 'Yük Eklentisi',
+        'emoji': '📦',
         'effect': 'Yükleme kapasitesi ↑, hız & verim ↓'
     }
 }

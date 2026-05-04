@@ -754,7 +754,6 @@ def calculate_route(start_lat, start_lon, end_lat, end_lon,
         st.session_state.last_route = route_info
         
         # Geçmiş rotaya ekle
-        from datetime import datetime
         history_item = {
             'vehicle': vehicle_type,
             'distance': route_info['total_distance_m'] / 1000,
@@ -772,28 +771,6 @@ def calculate_route(start_lat, start_lon, end_lat, end_lon,
         st.error(f"❌ Rota hesaplama hatası: {str(e)}")
         return None
 
-
-def render_address_card(result, idx):
-    """Google Maps tarzı adres kartı rendererla"""
-    return f"""
-    <div style="
-        padding: 10px;
-        margin: 5px 0;
-        border: 1px solid #ddd;
-        border-radius: 5px;
-        cursor: pointer;
-        background: white;
-        transition: all 0.2s;
-    " onmouseover="this.style.background='#f5f5f5';this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)';" 
-       onmouseout="this.style.background='white';this.style.boxShadow='none';">
-        <div style="font-weight: bold; font-size: 14px; color: #1a1a1a;">
-            {result.get('main_name', '')}
-        </div>
-        <div style="font-size: 12px; color: #666; margin-top: 3px;">
-            {result.get('short_name', '')[len(result.get('main_name', ''))+2:]}
-        </div>
-    </div>
-    """
 
 
 # ==================== ANA ARAYÜZ ====================
@@ -821,7 +798,7 @@ if st.session_state.app_page == 'welcome':
         st.markdown("""
         <div style='text-align:center; color:#999; font-size:13px;'>
         OSMnx • NetworkX • Folium • Streamlit<br>
-        Sakarya Üniversitesi Kariyer Zirvesi 2026
+        Sakarya Uygulamalı Bilimler Üniversitesi Kariyer Zirvesi 2026
         </div>
         """, unsafe_allow_html=True)
 
@@ -1278,13 +1255,18 @@ elif st.session_state.app_page == 'map':
 
         # Rota hesapla düğmesi
         if st.button("🔍 Rota Hesapla", use_container_width=True, type="primary"):
-            with st.spinner("Optimal rota hesaplanıyor..."):
-                route_info = calculate_route(
-                    start_lat, start_lon,
-                    end_lat, end_lon,
-                    vehicle_type, hour
-                )
-                st.rerun()
+            if st.session_state.start_lat_live is None:
+                st.warning("⚠️ Lütfen önce bir **başlangıç noktası** seçin.")
+            elif st.session_state.end_lat_live is None:
+                st.warning("⚠️ Lütfen önce bir **bitiş noktası** seçin.")
+            else:
+                with st.spinner("Optimal rota hesaplanıyor..."):
+                    route_info = calculate_route(
+                        start_lat, start_lon,
+                        end_lat, end_lon,
+                        vehicle_type, hour
+                    )
+                    st.rerun()
 
         # Rota silme düğmesi
         if st.session_state.last_route:

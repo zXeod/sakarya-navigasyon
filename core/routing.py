@@ -473,9 +473,3 @@ class AlternativeRoutes:
         
         return routes[:k]
 
-
-# Import osmnx (bu dosyada kullanılan fonksiyonlar için)
-try:
-    import osmnx as ox
-except ImportError:
-    ox = None
