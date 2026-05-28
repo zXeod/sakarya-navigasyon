@@ -141,38 +141,38 @@ def clear_cache() -> None:
 def get_graph_info(graph: Optional[nx.MultiDiGraph] = None) -> dict:
     """
     Graf hakkında bilgi döndür
-    
+
     Args:
         graph: Bilgi alınacak graf (None ise cache'ten yükle)
-    
+
     Returns:
         Graf bilgileri içeren sözlük
     """
     if graph is None:
         graph = get_graph_cached()
-    
-    # En sık karşılaşılan highway tipleri
-    highway_types = {}
-    for u, v, data in graph.edges(data=True):
-        hw_type = data.get('highway', 'unknown')
-        if isinstance(hw_type, list):
-            hw_type = hw_type[0]
-        highway_types[hw_type] = highway_types.get(hw_type, 0) + 1
-    
-    # En sık karşılaşılan surface tipleri
-    surface_types = {}
-    for u, v, data in graph.edges(data=True):
-        surface = data.get('surface', 'unknown')
-        surface_types[surface] = surface_types.get(surface, 0) + 1
-    
+
+    # Tek geçişte highway ve surface tiplerini say
+    highway_types: dict = {}
+    surface_types: dict = {}
+    for _u, _v, data in graph.edges(data=True):
+        hw = data.get('highway', 'unknown')
+        if isinstance(hw, list):
+            hw = hw[0]
+        highway_types[hw] = highway_types.get(hw, 0) + 1
+
+        sf = data.get('surface', 'unknown')
+        surface_types[sf] = surface_types.get(sf, 0) + 1
+
     return {
         'nodes': len(graph.nodes),
         'edges': len(graph.edges),
-        'is_connected': nx.is_strongly_connected(graph),
+        # nx.is_strongly_connected is O(V+E) and too slow for the UI expander;
+        # use weakly-connected component count instead (much faster).
+        'is_connected': nx.number_weakly_connected_components(graph) == 1,
         'top_highways': sorted(highway_types.items(), key=lambda x: x[1], reverse=True)[:5],
         'top_surfaces': sorted(surface_types.items(), key=lambda x: x[1], reverse=True)[:5],
         'cache_exists': CACHE_FILE.exists(),
-        'cache_size_mb': CACHE_FILE.stat().st_size / (1024*1024) if CACHE_FILE.exists() else 0,
+        'cache_size_mb': CACHE_FILE.stat().st_size / (1024 * 1024) if CACHE_FILE.exists() else 0,
     }
 
 
