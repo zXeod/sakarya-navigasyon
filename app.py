@@ -505,86 +505,124 @@ def create_folium_map(graph, route_info=None, start_lat_live=None, start_lon_liv
 
 
 def search_photon(query: str) -> List[Dict]:
-    """Photon API ile Sakarya odaklı geocoding."""
+    """Photon API ile Sakarya odaklı geocoding — çoklu şube/POI desteği."""
     if not query or len(query.strip()) < 2:
         return []
 
-    params = {
-        "q": f"{query} Sakarya",
-        "limit": 7,
-        "bbox": "29.5,40.3,31.5,41.2",   # lon_min,lat_min,lon_max,lat_max
-        "lang": "tr",
+    # İki ayrı istek: isimli POI + bbox içi geniş arama
+    searches = [
+        {"q": f"{query} Sakarya", "limit": 10, "lang": "tr"},
+        {"q": query,              "limit": 10, "lang": "tr",
+         "bbox": "29.5,40.3,31.5,41.2"},
+    ]
+
+    # (osm_key, osm_value) tuple → ikon (çok daha doğru eşleşme)
+    ICONS: Dict[tuple, str] = {
+        ("amenity", "university"): "🎓", ("building", "university"): "🎓",
+        ("amenity", "school"):     "🏫", ("building", "school"):     "🏫",
+        ("amenity", "college"):    "🎓", ("amenity", "tutoring"):    "📚",
+        ("amenity", "language_school"): "📚", ("amenity", "driving_school"): "🚗",
+        ("amenity", "kindergarten"): "🧒",
+        ("amenity", "hospital"):   "🏥", ("amenity", "clinic"):      "🏥",
+        ("amenity", "pharmacy"):   "💊", ("amenity", "dentist"):     "🦷",
+        ("amenity", "doctors"):    "👨‍⚕️",
+        ("railway", "station"):    "🚂", ("railway", "halt"):        "🚉",
+        ("amenity", "bus_station"): "🚌", ("highway", "bus_stop"):   "🚌",
+        ("amenity", "fuel"):       "⛽", ("amenity", "parking"):     "🅿️",
+        ("amenity", "restaurant"): "🍽️", ("amenity", "cafe"):       "☕",
+        ("amenity", "fast_food"):  "🍔",
+        ("shop",    "supermarket"): "🛒", ("amenity", "bank"):       "🏦",
+        ("amenity", "atm"):        "💳", ("shop",    "mall"):        "🏬",
+        ("amenity", "police"):     "👮", ("amenity", "fire_station"): "🚒",
+        ("amenity", "post_office"): "📮", ("amenity", "townhall"):   "🏛️",
+        ("amenity", "courthouse"): "⚖️",
+        ("amenity", "mosque"):     "🕌", ("amenity", "place_of_worship"): "🕌",
+        ("leisure", "sports_centre"): "🏋️", ("leisure", "stadium"): "🏟️",
+        ("leisure", "park"):       "🌳",
+        ("tourism", "hotel"):      "🏨", ("tourism", "motel"):       "🏨",
+        ("place",   "city"):       "🏙️", ("place",   "town"):        "🏘️",
+        ("place",   "village"):    "🏡", ("place",   "suburb"):      "📍",
+        ("place",   "neighbourhood"): "📍",
     }
 
-    TYPE_ICONS = {
-        "hospital": "🏥", "university": "🎓", "school": "🏫",
-        "college": "🎓", "restaurant": "🍽️", "pharmacy": "💊",
-        "bank": "🏦", "fuel": "⛽", "supermarket": "🛒",
-        "train_station": "🚂", "bus_station": "🚌", "park": "🌳",
-        "hotel": "🏨", "mosque": "🕌", "mall": "🏬",
-        "stadium": "🏟️", "street": "🛣️", "city": "🏙️",
-        "town": "🏘️", "village": "🏡", "residential": "🏠",
-        "district": "📍", "suburb": "📍",
-    }
-
-    try:
-        resp = requests.get(
-            "https://photon.komoot.io/api/",
-            params=params,
-            timeout=5,
-            headers={"User-Agent": "SakaryaNavApp/1.0"},
-        )
-        resp.raise_for_status()
-        features = resp.json().get("features", [])
-    except requests.exceptions.Timeout:
-        return []
-    except Exception:
-        return []
+    all_features: list = []
+    for params in searches:
+        try:
+            resp = requests.get(
+                "https://photon.komoot.io/api/",
+                params=params,
+                timeout=5,
+                headers={"User-Agent": "SakaryaNavApp/1.0"},
+            )
+            resp.raise_for_status()
+            all_features.extend(resp.json().get("features", []))
+        except Exception:
+            continue
 
     results: List[Dict] = []
-    seen: set = set()
+    seen_coords: set = set()
+    seen_name_district: set = set()
 
-    for f in features:
-        props = f.get("properties", {})
+    for f in all_features:
+        props  = f.get("properties", {})
         coords = f.get("geometry", {}).get("coordinates", [])
         if len(coords) < 2:
             continue
 
         # Photon [lon, lat] sırasıyla döndürür
         lon, lat = float(coords[0]), float(coords[1])
-
-        # Sakarya koordinat kontrolü
         if not (40.3 <= lat <= 41.2 and 29.5 <= lon <= 31.5):
             continue
 
-        key = (round(lat, 4), round(lon, 4))
-        if key in seen:
+        # Koordinat deduplicate (~110 m hassasiyet)
+        coord_key = (round(lat, 3), round(lon, 3))
+        if coord_key in seen_coords:
             continue
-        seen.add(key)
+        seen_coords.add(coord_key)
 
-        name     = props.get("name", "")
-        street   = props.get("street", "")
-        city     = props.get("city") or props.get("county", "Sakarya")
-        district = props.get("district") or props.get("suburb", "")
-        osm_val  = props.get("osm_value", "") or props.get("type", "")
+        osm_key     = props.get("osm_key", "")
+        osm_value   = props.get("osm_value", "")
+        name        = props.get("name", "")
+        street      = props.get("street", "")
+        housenumber = props.get("housenumber", "")
+        city        = props.get("city") or props.get("county", "Sakarya")
+        district    = props.get("district") or props.get("suburb", "")
 
-        icon    = TYPE_ICONS.get(osm_val, "📍")
-        primary = name or street or "Bilinmeyen Konum"
+        primary = name or street or "Bilinmeyen"
 
-        sub_parts = [p for p in [street if name else "", district, city]
-                     if p and p != primary]
-        subtitle = ", ".join(sub_parts[:2])
+        # Farklı ilçedeki aynı isimli şubeler KALSIN; sadece isimsiz kopyaları at
+        nd_key = f"{primary.lower()}_{district.lower()}"
+        if nd_key in seen_name_district and not housenumber:
+            continue
+        seen_name_district.add(nd_key)
 
-        label = f"{icon} {primary}"
+        icon = ICONS.get((osm_key, osm_value), "📍")
+
+        # Alt satır: sokak + numara + ilçe + şehir
+        addr_parts = []
+        if street and name:
+            addr_parts.append(f"{street} {housenumber}".strip())
+        elif housenumber:
+            addr_parts.append(f"No:{housenumber}")
+        if district and district != primary:
+            addr_parts.append(district)
+        if city and city != primary:
+            addr_parts.append(city)
+
+        subtitle = ", ".join(addr_parts[:3])
+        label    = f"{icon} {primary}"
         if subtitle:
             label += f"  ·  {subtitle}"
 
         results.append({
             "label": label,
-            "lat": lat,
-            "lon": lon,
-            "display_name": f"{primary}, {city}",
+            "lat":   lat,
+            "lon":   lon,
+            "display_name": f"{primary}, {district or city}",
         })
+
+        if len(results) >= 8:
+            break
 
     return results
 
