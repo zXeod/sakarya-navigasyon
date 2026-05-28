@@ -19,6 +19,12 @@ import json
 import os
 import streamlit.components.v1 as components
 
+try:
+    from streamlit_searchbox import st_searchbox
+    _SEARCHBOX_OK = True
+except ImportError:
+    _SEARCHBOX_OK = False
+
 # Projeyi path'e ekle
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -204,24 +210,12 @@ if 'end_lon_live' not in st.session_state:
 if 'route_history' not in st.session_state:
     st.session_state.route_history = []
 
-# Arama sonuçları için
-if 'start_search_query' not in st.session_state:
-    st.session_state.start_search_query = ""
+# Searchbox seçim sonuçları
+if 'start_search_result' not in st.session_state:
+    st.session_state.start_search_result = None
 
-if 'end_search_query' not in st.session_state:
-    st.session_state.end_search_query = ""
-
-if 'search_results_start' not in st.session_state:
-    st.session_state.search_results_start = []
-
-if 'search_results_end' not in st.session_state:
-    st.session_state.search_results_end = []
-
-if '_last_start_query_searched' not in st.session_state:
-    st.session_state._last_start_query_searched = ""
-
-if '_last_end_query_searched' not in st.session_state:
-    st.session_state._last_end_query_searched = ""
+if 'end_search_result' not in st.session_state:
+    st.session_state.end_search_result = None
 
 # Harita tıklama
 if '_last_map_click' not in st.session_state:
@@ -510,169 +504,98 @@ def create_folium_map(graph, route_info=None, start_lat_live=None, start_lon_liv
     return m
 
 
-def search_nominatim(query: str, limit: int = 5) -> List[Dict]:
-    """
-    Sakarya-odaklı akıllı adres arama.
-    - bounded=1: yalnızca Sakarya il sınırları
-    - Üniversite / hastane vb. anahtar kelimeler için yapısal amenity araması da yapar
-    """
-    if not query or len(query) < 2:
+def search_photon(query: str) -> List[Dict]:
+    """Photon API ile Sakarya odaklı geocoding."""
+    if not query or len(query.strip()) < 2:
         return []
 
-    # Sakarya il sınırları (dar): Kocaeli/Düzce hariç
-    # lon_min=30.0 → Kocaeli (29.9°E) dışarıda kalır
-    SAKARYA_BOX = '30.0,40.97,31.15,40.25'
-    headers = {'User-Agent': 'Sakarya-Navigation-System/1.0 (education)'}
-
-    KEYWORD_AMENITY: Dict[str, str] = {
-        'üniversite': 'university', 'universite': 'university',
-        'sau': 'university', 'subü': 'university', 'subu': 'university',
-        'sakarya üni': 'university', 'sakarya uni': 'university',
-        'hastane': 'hospital', 'klinik': 'clinic',
-        'okul': 'school', 'lise': 'school', 'ilkokul': 'school',
-        'eczane': 'pharmacy',
-        'park': 'park',
-        'cami': 'place_of_worship', 'camii': 'place_of_worship',
-        'gar': 'train_station', 'tren': 'train_station',
-        'itfaiye': 'fire_station',
-        'polis': 'police',
-        'belediye': 'townhall',
-        'kütüphane': 'library',
-        'kafe': 'cafe', 'restoran': 'restaurant',
-        'otel': 'hotel',
+    params = {
+        "q": f"{query} Sakarya",
+        "limit": 7,
+        "bbox": "29.5,40.3,31.5,41.2",   # lon_min,lat_min,lon_max,lat_max
+        "lang": "tr",
     }
 
-    q_lower = query.lower().strip()
-    matched_amenity = next((v for k, v in KEYWORD_AMENITY.items() if k in q_lower), None)
+    TYPE_ICONS = {
+        "hospital": "🏥", "university": "🎓", "school": "🏫",
+        "college": "🎓", "restaurant": "🍽️", "pharmacy": "💊",
+        "bank": "🏦", "fuel": "⛽", "supermarket": "🛒",
+        "train_station": "🚂", "bus_station": "🚌", "park": "🌳",
+        "hotel": "🏨", "mosque": "🕌", "mall": "🏬",
+        "stadium": "🏟️", "street": "🛣️", "city": "🏙️",
+        "town": "🏘️", "village": "🏡", "residential": "🏠",
+        "district": "📍", "suburb": "📍",
+    }
 
-    raw: list = []
-
-    # 1. Yapısal arama (amenity) — state=Sakarya ile il bazında filtrele
-    if matched_amenity:
-        try:
-            r = requests.get(
-                'https://nominatim.openstreetmap.org/search',
-                params={
-                    'amenity': matched_amenity,
-                    'state': 'Sakarya',
-                    'format': 'json', 'limit': limit * 3,
-                    'countrycodes': 'tr', 'addressdetails': 1,
-                    'accept-language': 'tr',
-                    'viewbox': SAKARYA_BOX, 'bounded': 1,
-                },
-                headers=headers, timeout=5
-            )
-            r.raise_for_status()
-            raw.extend(r.json())
-        except Exception:
-            pass
-
-    # 2. Serbest metin — sorguya "Sakarya" ekle + dar viewbox
     try:
-        # Sorguda zaten "sakarya" geçmiyorsa ekle
-        q_with_city = query if 'sakarya' in q_lower else f"{query} Sakarya"
-        r = requests.get(
-            'https://nominatim.openstreetmap.org/search',
-            params={
-                'q': q_with_city,
-                'format': 'json', 'limit': limit * 3,
-                'countrycodes': 'tr', 'addressdetails': 1,
-                'accept-language': 'tr',
-                'viewbox': SAKARYA_BOX, 'bounded': 1,
-            },
-            headers=headers, timeout=5
+        resp = requests.get(
+            "https://photon.komoot.io/api/",
+            params=params,
+            timeout=5,
+            headers={"User-Agent": "SakaryaNavApp/1.0"},
         )
-        r.raise_for_status()
-        raw.extend(r.json())
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+    except requests.exceptions.Timeout:
+        return []
     except Exception:
         return []
 
-    # Formatlama ve tekilleştirme
-    out: List[Dict] = []
+    results: List[Dict] = []
     seen: set = set()
 
-    for result in raw:
-        if len(out) >= limit:
-            break
-
-        lat = float(result.get('lat', 0))
-        lon = float(result.get('lon', 0))
-
-        # Sakarya sınırları dışındaki sonuçları at
-        if not (40.25 <= lat <= 40.97 and 30.0 <= lon <= 31.15):
+    for f in features:
+        props = f.get("properties", {})
+        coords = f.get("geometry", {}).get("coordinates", [])
+        if len(coords) < 2:
             continue
 
-        # Adres state/county alanında Sakarya geçmiyorsa at
-        address = result.get('address', {})
-        _state = (address.get('state') or address.get('province') or '').lower()
-        if _state and 'sakarya' not in _state:
+        # Photon [lon, lat] sırasıyla döndürür
+        lon, lat = float(coords[0]), float(coords[1])
+
+        # Sakarya koordinat kontrolü
+        if not (40.3 <= lat <= 41.2 and 29.5 <= lon <= 31.5):
             continue
 
-        coord_key = (round(lat, 3), round(lon, 3))
-        if coord_key in seen:
+        key = (round(lat, 4), round(lon, 4))
+        if key in seen:
             continue
-        seen.add(coord_key)
+        seen.add(key)
 
-        display_name = result.get('display_name', '')
+        name     = props.get("name", "")
+        street   = props.get("street", "")
+        city     = props.get("city") or props.get("county", "Sakarya")
+        district = props.get("district") or props.get("suburb", "")
+        osm_val  = props.get("osm_value", "") or props.get("type", "")
 
-        name = (
-            result.get('name') or
-            address.get('amenity') or
-            address.get('building') or
-            display_name.split(',')[0]
-        ).strip()
+        icon    = TYPE_ICONS.get(osm_val, "📍")
+        primary = name or street or "Bilinmeyen Konum"
 
-        # İlçe (county = Nominatim'de Türk ilçesi)
-        ilce = (address.get('county') or address.get('district') or '').strip()
-        # Mahalle/köy
-        mahalle = (
-            address.get('quarter') or
-            address.get('suburb') or
-            address.get('neighbourhood') or
-            address.get('village') or
-            ''
-        ).strip()
+        sub_parts = [p for p in [street if name else "", district, city]
+                     if p and p != primary]
+        subtitle = ", ".join(sub_parts[:2])
 
-        # "Hendek" gibi ilçe adı zaten isimde geçiyorsa tekrar yazma
-        if ilce and ilce.lower() in name.lower():
-            ilce = ''
+        label = f"{icon} {primary}"
+        if subtitle:
+            label += f"  ·  {subtitle}"
 
-        # Gösterim etiketi: "Hendek İlçesi" veya "Hendek / Esentepe Mah."
-        if ilce and mahalle and mahalle.lower() not in name.lower():
-            district_label = f"{ilce} / {mahalle}"
-        elif ilce:
-            district_label = ilce
-        elif mahalle and mahalle.lower() not in name.lower():
-            district_label = mahalle
-        else:
-            district_label = ''
-
-        out.append({
-            'main_name': name,
-            'short_name': district_label,
-            'full_name': display_name[:120],
-            'lat': lat, 'lon': lon,
-            'type': result.get('type', ''),
-            'district': district_label,
+        results.append({
+            "label": label,
+            "lat": lat,
+            "lon": lon,
+            "display_name": f"{primary}, {city}",
         })
 
-    return out
+    return results
 
 
-def update_start_search():
-    query = st.session_state.get('start_address_query', '').strip()
-    if len(query) >= 2:
-        st.session_state.search_results_start = search_nominatim(query, limit=5)
-    else:
-        st.session_state.search_results_start = []
+def _photon_wrapper_start(query: str):
+    """st_searchbox için (label, değer) tuple listesi döndürür."""
+    return [(r["label"], r) for r in search_photon(query)]
 
 
-def update_end_search():
-    query = st.session_state.get('end_address_query', '').strip()
-    if len(query) >= 2:
-        st.session_state.search_results_end = search_nominatim(query, limit=5)
-    else:
-        st.session_state.search_results_end = []
+def _photon_wrapper_end(query: str):
+    return [(r["label"], r) for r in search_photon(query)]
 
 
 # ==================== PROFIL YÖNETIMI ====================
@@ -1030,12 +953,10 @@ elif st.session_state.app_page == 'map':
             st.session_state.end_lon_live = None
             # Adres ve arama state'ini sıfırla
             for key in list(st.session_state.keys()):
-                if 'address' in key or 'lat_input' in key or 'lon_input' in key:
+                if 'searchbox' in key or 'address' in key or 'lat_input' in key or 'lon_input' in key:
                     del st.session_state[key]
-            st.session_state.search_results_start = []
-            st.session_state.search_results_end = []
-            st.session_state._last_start_query_searched = ""
-            st.session_state._last_end_query_searched = ""
+            st.session_state.start_search_result = None
+            st.session_state.end_search_result = None
             st.session_state._last_map_click = None
             st.rerun()
 
@@ -1127,52 +1048,40 @@ elif st.session_state.app_page == 'map':
                     st.session_state.start_geo_lon = None
                     st.rerun()
 
-        # Adres arama
-        _col_sinput, _col_sbtn = st.columns([3, 1])
-        with _col_sinput:
-            st.text_input(
+        # Adres arama — Photon autocomplete
+        if _SEARCHBOX_OK:
+            _start_sel = st_searchbox(
+                _photon_wrapper_start,
+                key="start_searchbox",
+                placeholder="Ör: Sakarya Üniversitesi, Adapazarı Gar, Hastane...",
+                label="🔍 Adres Ara",
+                clear_on_submit=False,
+                debounce=300,
+                rerun_on_update=True,
+            )
+            if _start_sel is not None:
+                st.session_state.start_lat_live = _start_sel["lat"]
+                st.session_state.start_lon_live = _start_sel["lon"]
+                st.session_state.start_search_result = _start_sel
+                st.toast(f"📍 {_start_sel['display_name']} başlangıç olarak seçildi", icon="✅")
+        else:
+            # Fallback: searchbox yüklü değilse basit text_input
+            _sq = st.text_input(
                 "🔍 Adres Ara (Sakarya)",
                 placeholder="Ör: Üniversite, Gar, Hastane...",
-                key="start_address_query",
-                on_change=update_start_search
+                key="start_address_query_fb",
             )
-        with _col_sbtn:
-            st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-            if st.button("🔍", key="search_start_btn", use_container_width=True):
-                update_start_search()
-
-        # Render anında da kontrol et (yeni query varsa ara)
-        _sq = st.session_state.get('start_address_query', '')
-        if _sq != st.session_state._last_start_query_searched:
-            if len(_sq) >= 2:
-                st.session_state.search_results_start = search_nominatim(_sq)
-            else:
-                st.session_state.search_results_start = []
-            st.session_state._last_start_query_searched = _sq
+            if st.button("🔍 Ara", key="search_start_fb_btn"):
+                _fb_results = search_photon(_sq)
+                if _fb_results:
+                    _r0 = _fb_results[0]
+                    st.session_state.start_lat_live = _r0["lat"]
+                    st.session_state.start_lon_live = _r0["lon"]
+                    st.toast(f"📍 {_r0['display_name']} seçildi", icon="✅")
+                    st.rerun()
 
         start_lat = st.session_state.start_lat_live if st.session_state.start_lat_live else 40.76
         start_lon = st.session_state.start_lon_live if st.session_state.start_lon_live else 30.39
-
-        if st.session_state.search_results_start:
-            for idx, result in enumerate(st.session_state.search_results_start):
-                btn = st.button(
-                    f"📍 {result['main_name']}",
-                    key=f"start_result_{idx}",
-                    use_container_width=True
-                )
-                if result.get('district'):
-                    st.markdown(
-                        f"<div style='font-size:11px;color:#888;"
-                        f"margin:-10px 0 6px 8px'>📌 {result['district']}</div>",
-                        unsafe_allow_html=True
-                    )
-                if btn:
-                    st.session_state.start_lat_live = result['lat']
-                    st.session_state.start_lon_live = result['lon']
-                    st.session_state.search_results_start = []
-                    st.session_state._last_start_query_searched = result['main_name']
-                    st.toast(f"📍 {result['main_name']} başlangıç olarak seçildi", icon="✅")
-                    st.rerun()
 
         # ==================== BİTİŞ NOKTASI ====================
         st.subheader("🏁 Bitiş Noktası")
@@ -1204,52 +1113,40 @@ elif st.session_state.app_page == 'map':
                     st.session_state.end_geo_lon = None
                     st.rerun()
 
-        # Adres arama
-        _col_einput, _col_ebtn = st.columns([3, 1])
-        with _col_einput:
-            st.text_input(
+        # Adres arama — Photon autocomplete
+        if _SEARCHBOX_OK:
+            _end_sel = st_searchbox(
+                _photon_wrapper_end,
+                key="end_searchbox",
+                placeholder="Ör: Hendek, Akyazı Devlet Hastanesi, Gar...",
+                label="🔍 Adres Ara",
+                clear_on_submit=False,
+                debounce=300,
+                rerun_on_update=True,
+            )
+            if _end_sel is not None:
+                st.session_state.end_lat_live = _end_sel["lat"]
+                st.session_state.end_lon_live = _end_sel["lon"]
+                st.session_state.end_search_result = _end_sel
+                st.toast(f"🏁 {_end_sel['display_name']} bitiş olarak seçildi", icon="✅")
+        else:
+            # Fallback
+            _eq = st.text_input(
                 "🔍 Adres Ara (Sakarya)",
                 placeholder="Ör: Valilik, Gar, Hastane...",
-                key="end_address_query",
-                on_change=update_end_search
+                key="end_address_query_fb",
             )
-        with _col_ebtn:
-            st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-            if st.button("🔍", key="search_end_btn", use_container_width=True):
-                update_end_search()
-
-        # Render anında da kontrol et
-        _eq = st.session_state.get('end_address_query', '')
-        if _eq != st.session_state._last_end_query_searched:
-            if len(_eq) >= 2:
-                st.session_state.search_results_end = search_nominatim(_eq)
-            else:
-                st.session_state.search_results_end = []
-            st.session_state._last_end_query_searched = _eq
+            if st.button("🔍 Ara", key="search_end_fb_btn"):
+                _fb_results = search_photon(_eq)
+                if _fb_results:
+                    _r0 = _fb_results[0]
+                    st.session_state.end_lat_live = _r0["lat"]
+                    st.session_state.end_lon_live = _r0["lon"]
+                    st.toast(f"🏁 {_r0['display_name']} seçildi", icon="✅")
+                    st.rerun()
 
         end_lat = st.session_state.end_lat_live if st.session_state.end_lat_live else 40.75
         end_lon = st.session_state.end_lon_live if st.session_state.end_lon_live else 30.40
-
-        if st.session_state.search_results_end:
-            for idx, result in enumerate(st.session_state.search_results_end):
-                btn = st.button(
-                    f"📍 {result['main_name']}",
-                    key=f"end_result_{idx}",
-                    use_container_width=True
-                )
-                if result.get('district'):
-                    st.markdown(
-                        f"<div style='font-size:11px;color:#888;"
-                        f"margin:-10px 0 6px 8px'>📌 {result['district']}</div>",
-                        unsafe_allow_html=True
-                    )
-                if btn:
-                    st.session_state.end_lat_live = result['lat']
-                    st.session_state.end_lon_live = result['lon']
-                    st.session_state.search_results_end = []
-                    st.session_state._last_end_query_searched = result['main_name']
-                    st.toast(f"🏁 {result['main_name']} bitiş olarak seçildi", icon="✅")
-                    st.rerun()
 
         st.divider()
 
@@ -1372,12 +1269,10 @@ elif st.session_state.app_page == 'map':
                     if click_mode == "📍 Başlangıç Seç":
                         st.session_state.start_lat_live = lc['lat']
                         st.session_state.start_lon_live = lc['lng']
-                        st.session_state._last_start_query_searched = ""
                         st.toast(f"📍 Başlangıç seçildi: {lc['lat']:.4f}, {lc['lng']:.4f}", icon="✅")
                     elif click_mode == "🏁 Bitiş Seç":
                         st.session_state.end_lat_live = lc['lat']
                         st.session_state.end_lon_live = lc['lng']
-                        st.session_state._last_end_query_searched = ""
                         st.toast(f"🏁 Bitiş seçildi: {lc['lat']:.4f}, {lc['lng']:.4f}", icon="✅")
                     st.rerun()
 
