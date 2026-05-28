@@ -545,12 +545,12 @@ def search_photon(query: str) -> List[Dict]:
     return results
 
 
-def _photon_wrapper_start(query: str):
+def _photon_wrapper_start(query: str, **_):
     """st_searchbox için (label, değer_dict) tuple listesi döndürür."""
     return [(r["label"], r) for r in search_photon(query)]
 
 
-def _photon_wrapper_end(query: str):
+def _photon_wrapper_end(query: str, **_):
     return [(r["label"], r) for r in search_photon(query)]
 
 
