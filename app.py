@@ -1071,9 +1071,10 @@ elif st.session_state.app_page == 'map':
                 st.warning("⚠️ Lütfen önce bir **bitiş noktası** seçin.")
             else:
                 with st.spinner("Optimal rota hesaplanıyor..."):
-                    calculate_route(start_lat, start_lon,
-                                    end_lat,   end_lon,
-                                    vehicle_type, hour)
+                    _result = calculate_route(start_lat, start_lon,
+                                              end_lat,   end_lon,
+                                              vehicle_type, hour)
+                if _result:
                     st.rerun()
 
         if st.session_state.last_route:
