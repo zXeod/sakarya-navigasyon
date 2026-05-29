@@ -397,14 +397,13 @@ def create_folium_map(
     return m
 
 
-# ── Photon arama (cache 60s) ──────────────────────────────────────────────────
+# ── Nominatim arama (cache 60s) ───────────────────────────────────────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def search_photon(query: str) -> List[Dict]:
     """
-    Photon API ile Sakarya odaklı geocoding.
-    - İki paralel istek: konum biasli + bbox
-    - (osm_key, osm_value) tuple ikon sistemi
-    - Farklı ilçedeki aynı isimli şubeler ayrı satır
+    Nominatim (OpenStreetMap) API ile Sakarya odaklı geocoding.
+    - Sakarya ili viewbox + bounded ile sınırlı arama
+    - (class, type) tuple ikon sistemi
     - Sonuçlar 60 saniye cache'lenir
     """
     if not query or len(query.strip()) < 2:
@@ -457,77 +456,78 @@ def search_photon(query: str) -> List[Dict]:
         ("place",   "neighbourhood"):   "📍",
     }
 
-    # İki istek: Sakarya konum biasli + bbox içinde direkt
-    searches = [
-        {"q": f"{query} Sakarya", "limit": 10, "lang": "tr",
-         "lat": 40.76, "lon": 30.39},             # Adapazarı merkezi
-        {"q": query,              "limit": 10, "lang": "tr",
-         "bbox": "29.5,40.3,31.5,41.2"},
-    ]
-
-    all_features: list = []
-    for params in searches:
-        try:
-            resp = requests.get(
-                "https://photon.komoot.io/api/",
-                params=params, timeout=5,
-                headers={"User-Agent": "SakaryaNavApp/1.0"},
-            )
-            resp.raise_for_status()
-            all_features.extend(resp.json().get("features", []))
-        except Exception:
-            continue
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q":            f"{query.strip()}, Sakarya",
+                "format":       "json",
+                "limit":        10,
+                "bounded":      1,
+                "viewbox":      "29.5,41.2,31.5,40.3",   # west,north,east,south
+                "countrycodes": "tr",
+                "addressdetails": 1,
+            },
+            timeout=8,
+            headers={
+                "User-Agent": (
+                    "SakaryaNavApp/1.0 "
+                    "(github.com/zXeod/sakarya-navigasyon)"
+                )
+            },
+        )
+        resp.raise_for_status()
+        items: list = resp.json()
+    except Exception:
+        return []
 
     results: List[Dict] = []
     seen_coords: set = set()
-    seen_nd:     set = set()
+    seen_names:  set = set()
 
-    for f in all_features:
-        props  = f.get("properties", {})
-        coords = f.get("geometry", {}).get("coordinates", [])
-        if len(coords) < 2:
+    for item in items:
+        try:
+            lat = float(item["lat"])
+            lon = float(item["lon"])
+        except (KeyError, ValueError):
             continue
 
-        # ⚠️ Photon [lon, lat] döndürür — ters!
-        lon, lat = float(coords[0]), float(coords[1])
         if not (40.3 <= lat <= 41.2 and 29.5 <= lon <= 31.5):
             continue
 
-        # Koordinat deduplicate (~110 m hassasiyet)
         coord_key = (round(lat, 3), round(lon, 3))
         if coord_key in seen_coords:
             continue
         seen_coords.add(coord_key)
 
-        osm_key     = props.get("osm_key", "")
-        osm_value   = props.get("osm_value", "")
-        name        = props.get("name", "")
-        street      = props.get("street", "")
-        housenumber = props.get("housenumber", "")
-        city        = props.get("city") or props.get("county", "Sakarya")
-        district    = props.get("district") or props.get("suburb", "")
+        osm_class = item.get("class", "")
+        osm_type  = item.get("type", "")
+        address   = item.get("address", {})
 
-        primary = name or street or "Bilinmeyen"
+        # İsim: display_name'in ilk parçası
+        display_name = item.get("display_name", "")
+        name_parts   = [p.strip() for p in display_name.split(",") if p.strip()]
+        primary      = name_parts[0] if name_parts else "Bilinmeyen"
 
-        # Farklı ilçedeki aynı isimli şubeler KALSIN; isimsiz kopyalar atılsın
-        nd_key = f"{primary.lower()}_{district.lower()}"
-        if nd_key in seen_nd and not housenumber:
+        district = (address.get("suburb") or address.get("city_district")
+                    or address.get("quarter") or "")
+        city     = (address.get("city") or address.get("town")
+                    or address.get("county") or "Sakarya")
+
+        nd_key = primary.lower()
+        if nd_key in seen_names:
             continue
-        seen_nd.add(nd_key)
+        seen_names.add(nd_key)
 
-        icon = ICONS.get((osm_key, osm_value), "📍")
+        icon = ICONS.get((osm_class, osm_type), "📍")
 
         addr_parts: list = []
-        if street and name:
-            addr_parts.append(f"{street} {housenumber}".strip())
-        elif housenumber:
-            addr_parts.append(f"No:{housenumber}")
-        if district and district != primary:
+        if district and district.lower() != primary.lower():
             addr_parts.append(district)
-        if city and city != primary:
+        if city and city.lower() != primary.lower():
             addr_parts.append(city)
 
-        subtitle = ", ".join(addr_parts[:3])
+        subtitle = ", ".join(addr_parts[:2])
         label = f"{icon} {primary}"
         if subtitle:
             label += f"  ·  {subtitle}"
