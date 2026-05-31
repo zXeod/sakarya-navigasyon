@@ -88,6 +88,29 @@ function getGeo(){{
     components.html(html, height=62)
 
 
+# ── SUBÜ saydam watermark ────────────────────────────────────────────────────
+def _subu_watermark() -> None:
+    """Harita öncesi sayfalarda saydam SUBÜ logosu/watermark göster."""
+    st.markdown("""
+<div style="position:fixed;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  opacity:0.045;pointer-events:none;z-index:0;
+  text-align:center;user-select:none">
+  <img id="subu-logo-img"
+       src="https://www.subu.edu.tr/Content/uploads/imgs/subu-amblemi.png"
+       style="width:340px;filter:brightness(10) grayscale(1)"
+       onerror="this.style.display='none';document.getElementById('subu-txt-wm').style.display='block'">
+  <div id="subu-txt-wm" style="display:none">
+    <div style="font-size:96px;font-weight:900;color:#fff;letter-spacing:10px;
+      font-family:'Arial Black',sans-serif;line-height:1">SUBÜ</div>
+    <div style="font-size:14px;color:#fff;margin-top:10px;letter-spacing:3px;
+      font-family:Arial,sans-serif;text-transform:uppercase">
+      Sakarya Uygulamalı Bilimler Üniversitesi</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
 # ── Araç tipi seçim kartı ────────────────────────────────────────────────────
 def vehicle_type_card(vtype: str, emoji: str, label: str, desc: str,
                       tags: list, color: str,
@@ -973,6 +996,7 @@ def _popular_picks(field: str) -> None:
 
 # ── Sayfa: Hoşgeldiniz ────────────────────────────────────────────────────────
 if st.session_state.app_page == 'welcome':
+    _subu_watermark()
     st.markdown("""
     <div style='text-align:center;padding:60px 20px 30px'>
         <div style='font-size:80px;margin-bottom:16px'>🗺️</div>
@@ -999,6 +1023,7 @@ if st.session_state.app_page == 'welcome':
 
 # ── Sayfa: Araç Tipi Seç ─────────────────────────────────────────────────────
 elif st.session_state.app_page == 'select_type':
+    _subu_watermark()
     st.markdown("## 🚘 Vasıta Türünü Seçin")
     st.caption("Hangi araç ile gitmek istiyorsunuz?")
     st.markdown("---")
@@ -1024,6 +1049,7 @@ elif st.session_state.app_page == 'select_type':
 
 # ── Sayfa: Marka Seç ──────────────────────────────────────────────────────────
 elif st.session_state.app_page == 'select_brand':
+    _subu_watermark()
     _vtype = st.session_state.sel_vehicle_type
     _bc, _tc = st.columns([1, 8])
     with _bc:
@@ -1055,6 +1081,7 @@ elif st.session_state.app_page == 'select_brand':
 
 # ── Sayfa: Model Seç ──────────────────────────────────────────────────────────
 elif st.session_state.app_page == 'select_model':
+    _subu_watermark()
     _vtype = st.session_state.sel_vehicle_type
     _brand = st.session_state.sel_brand
     _bc, _tc = st.columns([1, 8])
@@ -1062,7 +1089,12 @@ elif st.session_state.app_page == 'select_model':
         if st.button("← Geri"):
             st.session_state.app_page = 'select_brand'; st.rerun()
     with _tc:
-        st.markdown(f"## {BRAND_EMOJI.get(_brand,'🚘')} {_brand} — Model Seçin")
+        _logo_html = get_brand_logo_html(_brand, size=36)
+        st.markdown(
+            f"<h2 style='display:flex;align-items:center;gap:12px;margin:0'>"
+            f"{_logo_html}<span>{_brand} — Model Seçin</span></h2>",
+            unsafe_allow_html=True
+        )
     st.caption(f"Sakarya'da popüler {_brand} modelleri"); st.markdown("---")
     _models = get_models(_vtype, _brand)
     for _row in [_models[i:i+3] for i in range(0, len(_models), 3)]:
@@ -1078,6 +1110,7 @@ elif st.session_state.app_page == 'select_model':
 
 # ── Sayfa: Motor Seç ──────────────────────────────────────────────────────────
 elif st.session_state.app_page == 'select_engine':
+    _subu_watermark()
     _vtype  = st.session_state.sel_vehicle_type
     _brand  = st.session_state.sel_brand
     _model  = st.session_state.sel_model
@@ -1086,7 +1119,12 @@ elif st.session_state.app_page == 'select_engine':
         if st.button("← Geri"):
             st.session_state.app_page = 'select_model'; st.rerun()
     with _tc:
-        st.markdown(f"## {_brand} {_model} — Motor Seçin")
+        _logo_html = get_brand_logo_html(_brand, size=36)
+        st.markdown(
+            f"<h2 style='display:flex;align-items:center;gap:12px;margin:0'>"
+            f"{_logo_html}<span>{_brand} {_model} — Motor Seçin</span></h2>",
+            unsafe_allow_html=True
+        )
     st.caption("Motor hacmi ve güç"); st.markdown("---")
     _engines = get_engines(_vtype, _brand, _model)
     for _row in [_engines[i:i+2] for i in range(0, len(_engines), 2)]:
@@ -1101,12 +1139,18 @@ elif st.session_state.app_page == 'select_engine':
 
 # ── Sayfa: Modifikasyon Seç ───────────────────────────────────────────────────
 elif st.session_state.app_page == 'select_mods':
+    _subu_watermark()
     _vtype  = st.session_state.sel_vehicle_type
     _brand  = st.session_state.sel_brand
     _model  = st.session_state.sel_model
     _engine = st.session_state.sel_engine
 
-    st.markdown(f"## ⚙️ {_brand} {_model} {_engine}")
+    _logo_html = get_brand_logo_html(_brand, size=36)
+    st.markdown(
+        f"<h2 style='display:flex;align-items:center;gap:12px;margin:0'>"
+        f"{_logo_html}<span>{_brand} {_model} — {_engine}</span></h2>",
+        unsafe_allow_html=True
+    )
     st.markdown("### Ek Tercihler (İsteğe Bağlı)")
     st.caption("Aracınızda modifikasyon var mı?"); st.markdown("---")
 

@@ -171,8 +171,9 @@ CATALOG = {
             'X3': ['xDrive20d', 'xDrive20i'],
         },
         'Fiat': {
-            'Egea': ['1.4 Fire 95bg', '1.6 Multijet 120bg', '1.3 Multijet 95bg'],
-            'Tipo': ['1.4 100bg', '1.6 D Multijet 120bg'],
+            'Egea':  ['1.4 Fire 95bg', '1.6 Multijet 120bg', '1.3 Multijet 95bg'],
+            'Linea': ['1.3 Multijet 90bg', '1.4 Fire 77bg', '1.6 Multijet 105bg'],
+            'Tipo':  ['1.4 100bg', '1.6 D Multijet 120bg'],
             'Punto': ['1.4 8V 77bg', '1.3 Multijet 75bg'],
         },
         'Ford': {
