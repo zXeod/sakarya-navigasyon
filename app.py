@@ -2,6 +2,7 @@
 Sakarya Akıllı Navigasyon Sistemi - Streamlit Arayüzü
 Sol kolon: araç tipi, saat, başlangıç/bitiş noktaları
 Sağ kolon: Folium haritası + rota detayları
+v2.1 - dark tema, markdown+button kartlar, Google/Yandex/WhatsApp paylaşım
 """
 
 import streamlit as st
