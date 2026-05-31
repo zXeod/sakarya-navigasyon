@@ -88,23 +88,44 @@ function getGeo(){{
     components.html(html, height=62)
 
 
+# ── SUBÜ logo SVG (lale-kitap amblemi) ───────────────────────────────────────
+_SUBU_LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240">'
+    '<g fill="white">'
+    # Orta yaprak (en uzun, dik)
+    '<path d="M100 12 C87 52 84 118 100 192 C116 118 113 52 100 12Z"/>'
+    # Sol yaprak (~25° sola)
+    '<path d="M100 192 C89 165 65 122 40 58 C52 72 78 124 100 192Z"/>'
+    # Sağ yaprak (simetrik)
+    '<path d="M100 192 C122 124 148 72 160 58 C135 122 111 165 100 192Z"/>'
+    # Sol kanat (kitap sol sayfası)
+    '<path d="M100 192 C74 200 44 210 12 225 C40 215 72 205 100 192Z"/>'
+    # Sağ kanat (kitap sağ sayfası)
+    '<path d="M100 192 C128 205 160 215 188 225 C156 210 126 200 100 192Z"/>'
+    '</g>'
+    '</svg>'
+)
+
+import base64 as _b64
+_SUBU_LOGO_URI = (
+    "data:image/svg+xml;base64,"
+    + _b64.b64encode(_SUBU_LOGO_SVG.encode()).decode()
+)
+
+
 # ── SUBÜ saydam watermark ────────────────────────────────────────────────────
 def _subu_watermark() -> None:
-    """Harita öncesi sayfalarda saydam SUBÜ watermark göster."""
-    st.markdown("""
+    """Harita öncesi sayfalarda saydam SUBÜ amblemi + üniversite adı watermark."""
+    st.markdown(f"""
 <div style="position:fixed;top:50%;left:50%;
   transform:translate(-50%,-50%);
-  opacity:0.08;pointer-events:none;z-index:0;
-  text-align:center;user-select:none;width:600px">
-  <div style="font-size:110px;font-weight:900;color:#fff;letter-spacing:14px;
-    font-family:'Arial Black',Arial,sans-serif;line-height:1;margin-bottom:14px">SUBÜ</div>
-  <div style="width:80%;height:2px;background:#fff;margin:0 auto 14px"></div>
-  <div style="font-size:15px;color:#fff;letter-spacing:4px;
-    font-family:Arial,sans-serif;text-transform:uppercase;font-weight:600">
+  opacity:0.09;pointer-events:none;z-index:0;
+  text-align:center;user-select:none">
+  <img src="{_SUBU_LOGO_URI}"
+       style="width:220px;height:auto;display:block;margin:0 auto 18px">
+  <div style="font-size:14px;color:#fff;letter-spacing:3px;font-weight:700;
+    font-family:Arial,sans-serif;text-transform:uppercase;white-space:nowrap">
     Sakarya Uygulamalı Bilimler Üniversitesi</div>
-  <div style="font-size:12px;color:#fff;letter-spacing:2px;margin-top:6px;
-    font-family:Arial,sans-serif;opacity:0.7">
-    Kariyer Zirvesi 2026</div>
 </div>
 """, unsafe_allow_html=True)
 
