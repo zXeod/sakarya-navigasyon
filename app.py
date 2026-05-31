@@ -105,15 +105,11 @@ def _subu_watermark() -> None:
     if not _SUBU_LOGO_URI:
         return
     st.markdown(f"""
-<div style="position:fixed;top:50%;left:50%;
-  transform:translate(-50%,-50%);
-  opacity:0.13;pointer-events:none;z-index:0;
-  text-align:center;user-select:none">
+<div style="position:fixed;top:0;left:0;width:100%;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0.07;pointer-events:none;z-index:0">
   <img src="{_SUBU_LOGO_URI}"
-       style="width:260px;height:auto;display:block;margin:0 auto 16px;border-radius:16px">
-  <div style="font-size:15px;color:#fff;letter-spacing:3px;font-weight:700;
-    font-family:Arial,sans-serif;text-transform:uppercase;white-space:nowrap">
-    Sakarya Uygulamalı Bilimler Üniversitesi</div>
+       style="width:90vh;max-width:90vw;height:auto;border-radius:24px">
 </div>
 """, unsafe_allow_html=True)
 
