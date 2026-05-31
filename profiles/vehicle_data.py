@@ -72,23 +72,25 @@ _BRAND_SVG_URIS: dict = {
 
 def get_brand_logo_html(brand: str, size: int = 44) -> str:
     """Marka için logo HTML döndür: SimpleIcons URL → SVG data URI → emoji."""
+    # Dark arka planda görünürlük için parlaklık filtresi
+    _img_style = (
+        f"max-height:{size}px;max-width:{size * 2}px;"
+        f"object-fit:contain;filter:brightness(1.9) saturate(0.85)"
+    )
     url = BRAND_LOGO_URLS.get(brand, '')
     if url:
         return (
-            f"<img src='{url}' "
-            f"style='max-height:{size}px;max-width:{size * 2}px;object-fit:contain'"
+            f"<img src='{url}' style='{_img_style}'"
             f" onerror=\"this.style.display='none'\">"
         )
     if brand == 'BMW Motorrad':
         return (
-            f"<img src='https://cdn.simpleicons.org/bmw' "
-            f"style='max-height:{size}px;max-width:{size * 2}px;object-fit:contain'>"
+            f"<img src='https://cdn.simpleicons.org/bmw' style='{_img_style}'>"
         )
     uri = _BRAND_SVG_URIS.get(brand)
     if uri:
         return (
-            f"<img src='{uri}' "
-            f"style='max-height:{size}px;max-width:{size * 2}px;object-fit:contain'>"
+            f"<img src='{uri}' style='{_img_style}'>"
         )
     return f"<span style='font-size:{size - 8}px'>{BRAND_EMOJI.get(brand, '🚘')}</span>"
 

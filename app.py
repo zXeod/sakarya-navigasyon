@@ -90,23 +90,21 @@ function getGeo(){{
 
 # ── SUBÜ saydam watermark ────────────────────────────────────────────────────
 def _subu_watermark() -> None:
-    """Harita öncesi sayfalarda saydam SUBÜ logosu/watermark göster."""
+    """Harita öncesi sayfalarda saydam SUBÜ watermark göster."""
     st.markdown("""
 <div style="position:fixed;top:50%;left:50%;
   transform:translate(-50%,-50%);
-  opacity:0.045;pointer-events:none;z-index:0;
-  text-align:center;user-select:none">
-  <img id="subu-logo-img"
-       src="https://www.subu.edu.tr/Content/uploads/imgs/subu-amblemi.png"
-       style="width:340px;filter:brightness(10) grayscale(1)"
-       onerror="this.style.display='none';document.getElementById('subu-txt-wm').style.display='block'">
-  <div id="subu-txt-wm" style="display:none">
-    <div style="font-size:96px;font-weight:900;color:#fff;letter-spacing:10px;
-      font-family:'Arial Black',sans-serif;line-height:1">SUBÜ</div>
-    <div style="font-size:14px;color:#fff;margin-top:10px;letter-spacing:3px;
-      font-family:Arial,sans-serif;text-transform:uppercase">
-      Sakarya Uygulamalı Bilimler Üniversitesi</div>
-  </div>
+  opacity:0.08;pointer-events:none;z-index:0;
+  text-align:center;user-select:none;width:600px">
+  <div style="font-size:110px;font-weight:900;color:#fff;letter-spacing:14px;
+    font-family:'Arial Black',Arial,sans-serif;line-height:1;margin-bottom:14px">SUBÜ</div>
+  <div style="width:80%;height:2px;background:#fff;margin:0 auto 14px"></div>
+  <div style="font-size:15px;color:#fff;letter-spacing:4px;
+    font-family:Arial,sans-serif;text-transform:uppercase;font-weight:600">
+    Sakarya Uygulamalı Bilimler Üniversitesi</div>
+  <div style="font-size:12px;color:#fff;letter-spacing:2px;margin-top:6px;
+    font-family:Arial,sans-serif;opacity:0.7">
+    Kariyer Zirvesi 2026</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1059,16 +1057,17 @@ elif st.session_state.app_page == 'select_brand':
         st.markdown(f"## {get_display_label(_vtype)} — Marka Seçin")
     st.caption("Sakarya'da popüler markalar"); st.markdown("---")
     _brands = get_brands(_vtype)
+    st.markdown("<div style='padding:12px 0 8px'></div>", unsafe_allow_html=True)
     for _row in [_brands[i:i+4] for i in range(0, len(_brands), 4)]:
         _cols = st.columns(4)
         for _ci, _brand in enumerate(_row):
             with _cols[_ci]:
                 st.markdown(
-                    f"<div style='text-align:center;height:58px;"
+                    f"<div style='text-align:center;height:90px;"
                     f"display:flex;align-items:center;justify-content:center;"
-                    f"margin-bottom:4px;background:rgba(128,128,128,0.07);"
-                    f"border-radius:8px;border:1px solid rgba(128,128,128,0.15)'>"
-                    f"{get_brand_logo_html(_brand)}</div>",
+                    f"margin-bottom:6px;background:rgba(128,128,128,0.07);"
+                    f"border-radius:10px;border:1px solid rgba(128,128,128,0.18)'>"
+                    f"{get_brand_logo_html(_brand, size=58)}</div>",
                     unsafe_allow_html=True
                 )
                 if st.button(_brand, use_container_width=True, key=f"brand_{_brand}"):
@@ -1077,6 +1076,7 @@ elif st.session_state.app_page == 'select_brand':
                     st.session_state.sel_engine = None
                     st.session_state.app_page   = 'select_model'
                     st.rerun()
+    st.markdown("<div style='padding-bottom:20px'></div>", unsafe_allow_html=True)
 
 
 # ── Sayfa: Model Seç ──────────────────────────────────────────────────────────
