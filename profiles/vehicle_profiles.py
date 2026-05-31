@@ -758,3 +758,61 @@ def calculate_cost_estimate(distance_km: float, route_surfaces: list, modificati
         'description': f"{round(total_consumption, 1)}L yakıt, {round(total_cost, 0)} TL tahmini maliyet"
     }
 
+
+# ── Karbon Emisyonu ──────────────────────────────────────────────────────────
+
+# g CO₂ / km — WLTP kombine değerleri (Türkiye ortalama parkı, 2024)
+_CO2_G_KM = {
+    'binek':      130,   # Ortalama benzinli binek
+    'modifiye':   185,   # SUV / arazi / pickup
+    'kamyon':     620,   # Ağır vasıta (yüklü)
+    'motosiklet':  95,   # Motosiklet (400–750 cc)
+    'bisiklet':     0,   # İnsan/elektrik gücü
+}
+
+_CO2_GRADES = [
+    (0,   'A+', '#1b5e20'),
+    (100, 'A',  '#2e7d32'),
+    (140, 'B',  '#558b2f'),
+    (180, 'C',  '#f57f17'),
+    (250, 'D',  '#e65100'),
+    (999, 'E',  '#b71c1c'),
+]
+
+
+def calculate_carbon_emission(distance_km: float, vehicle_type: str) -> dict:
+    """
+    CO₂ emisyonu ve emisyon notu hesapla.
+
+    Returns:
+        co2_per_km_g, total_co2_kg, grade, grade_color, context
+    """
+    base = _CO2_G_KM.get(vehicle_type, 130)
+    total_g  = base * distance_km
+    total_kg = total_g / 1000
+
+    grade, grade_color = 'D', '#e65100'
+    for threshold, g, c in _CO2_GRADES:
+        if base <= threshold:
+            grade, grade_color = g, c
+            break
+
+    if total_kg < 0.05:
+        context = "🌱 Neredeyse sıfır emisyon"
+    elif total_kg < 0.3:
+        context = f"🌿 {total_kg*1000:.0f} g — çok düşük"
+    elif total_kg < 1:
+        context = f"☕ {total_kg/0.21:.0f} bardak kahve üretimine eşdeğer"
+    elif total_kg < 5:
+        context = f"🌳 {total_kg / 0.060:.0f} ağacın 1 günlük CO₂ emilimi"
+    else:
+        context = f"✈️ {total_kg / 255:.2f} km uçuşa eşdeğer (kişi başı)"
+
+    return {
+        'co2_per_km_g': base,
+        'total_co2_g':  round(total_g),
+        'total_co2_kg': round(total_kg, 3),
+        'grade':        grade,
+        'grade_color':  grade_color,
+        'context':      context,
+    }

@@ -1,6 +1,96 @@
 """
 Sakarya'da popüler araç katalogu — marka/model/motor seçimi
 """
+import base64
+
+
+def _svg_uri(svg: str) -> str:
+    """SVG string'i base64 data URI'ye çevir."""
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.strip().encode()).decode()
+
+
+# SVG logolar: SimpleIcons'ta olmayan markalar için
+_BRAND_SVGS: dict = {
+    'Mercedes-Benz': (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        '<circle cx="50" cy="50" r="49" fill="#1c1c1c"/>'
+        '<circle cx="50" cy="50" r="47" fill="none" stroke="#aaa" stroke-width="1.5"/>'
+        '<line x1="50" y1="50" x2="50" y2="6" stroke="#ddd" stroke-width="3.5" stroke-linecap="round"/>'
+        '<line x1="50" y1="50" x2="89" y2="71" stroke="#ddd" stroke-width="3.5" stroke-linecap="round"/>'
+        '<line x1="50" y1="50" x2="11" y2="71" stroke="#ddd" stroke-width="3.5" stroke-linecap="round"/>'
+        '<circle cx="50" cy="6" r="3.5" fill="#ddd"/>'
+        '<circle cx="89" cy="71" r="3.5" fill="#ddd"/>'
+        '<circle cx="11" cy="71" r="3.5" fill="#ddd"/>'
+        '<circle cx="50" cy="50" r="4" fill="#ddd"/>'
+        '</svg>'
+    ),
+    'Kawasaki': (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 64">'
+        '<rect width="220" height="64" fill="#111"/>'
+        '<text x="110" y="44" font-family="Arial Black,sans-serif" font-weight="900"'
+        ' font-size="26" text-anchor="middle" fill="#00a651" letter-spacing="1">KAWASAKI</text>'
+        '</svg>'
+    ),
+    'Yamaha': (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 60">'
+        '<rect width="180" height="60" fill="#fff"/>'
+        '<text x="90" y="42" font-family="Arial Black,sans-serif" font-weight="900"'
+        ' font-size="28" text-anchor="middle" fill="#1a2faa" letter-spacing="2">YAMAHA</text>'
+        '</svg>'
+    ),
+    'Land Rover': (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64">'
+        '<rect width="200" height="64" fill="#f5f5f5"/>'
+        '<ellipse cx="100" cy="32" rx="96" ry="27" fill="none" stroke="#005a1f" stroke-width="2.5"/>'
+        '<text x="100" y="37" font-family="Arial,sans-serif" font-weight="bold"'
+        ' font-size="14" text-anchor="middle" fill="#005a1f" letter-spacing="2">LAND ROVER</text>'
+        '</svg>'
+    ),
+    'Tofas': (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 60">'
+        '<rect width="180" height="60" fill="#fff"/>'
+        '<text x="90" y="43" font-family="Arial Black,sans-serif" font-weight="900"'
+        ' font-size="30" text-anchor="middle" fill="#cc0000">TOFAŞ</text>'
+        '</svg>'
+    ),
+    'Isuzu': (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 60">'
+        '<rect width="180" height="60" fill="#fff"/>'
+        '<text x="90" y="43" font-family="Arial Black,sans-serif" font-weight="900"'
+        ' font-size="30" text-anchor="middle" fill="#cc0022" letter-spacing="2">ISUZU</text>'
+        '</svg>'
+    ),
+    'BMW Motorrad': None,   # BMW logosunu kullan
+}
+
+# Önbelleğe alınmış data URI'ler
+_BRAND_SVG_URIS: dict = {
+    brand: _svg_uri(svg) if svg else None
+    for brand, svg in _BRAND_SVGS.items()
+}
+
+
+def get_brand_logo_html(brand: str, size: int = 44) -> str:
+    """Marka için logo HTML döndür: SimpleIcons URL → SVG data URI → emoji."""
+    url = BRAND_LOGO_URLS.get(brand, '')
+    if url:
+        return (
+            f"<img src='{url}' "
+            f"style='max-height:{size}px;max-width:{size * 2}px;object-fit:contain'"
+            f" onerror=\"this.style.display='none'\">"
+        )
+    if brand == 'BMW Motorrad':
+        return (
+            f"<img src='https://cdn.simpleicons.org/bmw' "
+            f"style='max-height:{size}px;max-width:{size * 2}px;object-fit:contain'>"
+        )
+    uri = _BRAND_SVG_URIS.get(brand)
+    if uri:
+        return (
+            f"<img src='{uri}' "
+            f"style='max-height:{size}px;max-width:{size * 2}px;object-fit:contain'>"
+        )
+    return f"<span style='font-size:{size - 8}px'>{BRAND_EMOJI.get(brand, '🚘')}</span>"
 
 VEHICLE_TYPES = {
     'otomobil': {'label': '🚗 Otomobil', 'routing_profile': 'binek', 'emoji': '🚗'},
@@ -35,6 +125,34 @@ BRAND_EMOJI = {
     'Suzuki': '🔵',
     'Yamaha': '🔵',
     'BMW Motorrad': '🔷',
+}
+
+BRAND_LOGO_URLS = {
+    # cdn.simpleicons.org — doğrulanan markalar
+    'Audi':       'https://cdn.simpleicons.org/audi',
+    'BMW':        'https://cdn.simpleicons.org/bmw',
+    'Fiat':       'https://cdn.simpleicons.org/fiat',
+    'Ford':       'https://cdn.simpleicons.org/ford',
+    'Honda':      'https://cdn.simpleicons.org/honda',
+    'Hyundai':    'https://cdn.simpleicons.org/hyundai',
+    'Kia':        'https://cdn.simpleicons.org/kia',
+    'Nissan':     'https://cdn.simpleicons.org/nissan',
+    'Renault':    'https://cdn.simpleicons.org/renault',
+    'Toyota':     'https://cdn.simpleicons.org/toyota',
+    'Volkswagen': 'https://cdn.simpleicons.org/volkswagen',
+    'Volvo':      'https://cdn.simpleicons.org/volvo',
+    'Dacia':      'https://cdn.simpleicons.org/dacia',
+    'Jeep':       'https://cdn.simpleicons.org/jeep',
+    'Mitsubishi': 'https://cdn.simpleicons.org/mitsubishi',
+    'Suzuki':     'https://cdn.simpleicons.org/suzuki',
+    # Aşağıdakiler SimpleIcons'ta yok → emoji fallback (URL boş)
+    'Mercedes-Benz': '',
+    'Tofas':         '',
+    'Isuzu':         '',
+    'Land Rover':    '',
+    'Kawasaki':      '',
+    'Yamaha':        '',
+    'BMW Motorrad':  '',
 }
 
 CATALOG = {

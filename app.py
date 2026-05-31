@@ -13,12 +13,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import pandas as pd
 import streamlit.components.v1 as components
-
-try:
-    from streamlit_searchbox import st_searchbox
-    _SEARCHBOX_OK = True
-except ImportError:
-    _SEARCHBOX_OK = False
+from urllib.parse import quote as _urlencode
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -26,11 +21,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.graph_loader import get_graph_cached, get_graph_info
 from core.routing import SmartRouter
 from profiles import vehicle_profiles as vp
-from profiles.vehicle_profiles import list_vehicles
+from profiles.vehicle_profiles import list_vehicles, calculate_carbon_emission
 from profiles.vehicle_data import (
-    VEHICLE_TYPES, CATALOG, BRAND_EMOJI,
-    get_brands, get_models, get_engines, get_routing_profile, get_display_label
+    VEHICLE_TYPES, CATALOG, BRAND_EMOJI, BRAND_LOGO_URLS,
+    get_brands, get_models, get_engines, get_routing_profile, get_display_label,
+    get_brand_logo_html,
 )
+
 
 
 # ==================== GEO BUTTON (query_params tabanlı) ====================
@@ -55,7 +52,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding
       font-weight:500;transition:opacity .15s}}
 .btn:hover:not(:disabled){{opacity:.85}}
 .btn:disabled{{opacity:.5;cursor:default}}
-#msg{{font-size:11px;margin-top:5px;min-height:14px;color:#888}}
+#msg{{font-size:11px;margin-top:5px;min-height:14px;color:#667}}
 </style></head><body>
 <form id="gf" method="GET" target="_top">
   <input type="hidden" name="{field}_geo" id="coords">
@@ -74,7 +71,7 @@ function getGeo(){{
   navigator.geolocation.getCurrentPosition(
     function(pos){{
       var lat=pos.coords.latitude.toFixed(6), lon=pos.coords.longitude.toFixed(6);
-      msg.style.color='#2e7d32'; msg.textContent='✅ '+lat+', '+lon;
+      msg.style.color='#4caf50'; msg.textContent='✅ '+lat+', '+lon;
       document.getElementById('coords').value=lat+','+lon;
       document.getElementById('gf').submit();
     }},
@@ -88,6 +85,196 @@ function getGeo(){{
 }}
 </script></body></html>"""
     components.html(html, height=62)
+
+
+# ── Araç tipi seçim kartı (tüm kart tıklanabilir) ────────────────────────────
+def vehicle_type_card(vtype: str, emoji: str, label: str, desc: str,
+                      tags: list, color: str,
+                      preserve: dict | None = None) -> None:
+    """st.button tabanlı araç tipi kartı — sayfa yenilemez, Streamlit state kullanır."""
+    tags_text = " · ".join(tags)
+    if st.button(f"{emoji}  {label}\n{desc}\n{tags_text}",
+                 key=f"vtype_{vtype}", use_container_width=True):
+        st.session_state.sel_vehicle_type = vtype
+        st.session_state.sel_brand        = None
+        st.session_state.sel_model        = None
+        st.session_state.sel_engine       = None
+        st.session_state.app_page         = 'select_brand'
+        st.rerun()
+
+
+# ── Adres arama kutusu (Google Maps benzeri, query param iletişimi) ───────────
+def search_box_html(field: str, color: str,
+                    current_value: str = "",
+                    preserve: dict | None = None) -> None:
+    """
+    Canlı Nominatim aramalı arama kutusu.
+    Seçim yapıldığında `{field}_search=lat,lon,name` query param gönderir.
+    """
+    preserve = preserve or {}
+    hidden_inputs = "".join(
+        f'<input type="hidden" name="{k}" value="{v}">'
+        for k, v in preserve.items()
+    )
+    esc_val = current_value.replace('"', '&quot;').replace("'", "&#39;") if current_value else ""
+    html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:2px}}
+.wrap{{position:relative}}
+.bar{{display:flex;align-items:center;gap:7px;background:#1e2130;
+      border:1.5px solid #3a3d52;border-radius:22px;padding:9px 13px;
+      transition:border-color .15s,box-shadow .15s}}
+.bar.focused{{border-color:{color};box-shadow:0 2px 12px {color}44}}
+.icon{{color:#556;font-size:14px;flex-shrink:0}}
+.inp{{flex:1;border:none;outline:none;font-size:13.5px;color:#dde;background:transparent}}
+.inp::placeholder{{color:#4a4d62}}
+.clr{{background:none;border:none;cursor:pointer;color:#556;font-size:14px;
+      padding:2px 5px;border-radius:50%;display:none;flex-shrink:0;line-height:1}}
+.clr:hover{{background:#2a2d42;color:#99a}}
+.dd{{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#1a1d2e;
+     border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.55);
+     border:1px solid #3a3d52;z-index:9999;overflow:hidden;display:none;
+     max-height:320px;overflow-y:auto}}
+.dd.open{{display:block}}
+.sec{{font-size:10px;font-weight:700;color:#556;letter-spacing:1.2px;
+      padding:9px 13px 3px;text-transform:uppercase}}
+.it{{display:flex;align-items:center;gap:9px;padding:9px 13px;cursor:pointer;
+     transition:background .07s;user-select:none}}
+.it:hover,.it.foc{{background:#252840}}
+.ico{{font-size:16px;width:20px;text-align:center;flex-shrink:0}}
+.tx{{flex:1;min-width:0}}
+.p1{{font-size:13px;color:#ccd;font-weight:500;
+     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.p2{{font-size:11px;color:#667;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}}
+.tp{{font-size:10px;color:{color};background:{color}22;border-radius:4px;
+     padding:1px 5px;flex-shrink:0;white-space:nowrap}}
+.spin{{display:flex;align-items:center;gap:7px;padding:14px 13px;color:#667;font-size:12px}}
+.dot{{display:inline-block;width:12px;height:12px;border:2px solid #3a3d52;
+      border-top-color:{color};border-radius:50%;animation:sp .7s linear infinite}}
+@keyframes sp{{to{{transform:rotate(360deg)}}}}
+</style></head><body>
+<form method="GET" target="_top" id="sf">
+  <input type="hidden" name="{field}_search" id="res_input">
+  {hidden_inputs}
+</form>
+<div class="wrap">
+  <div class="bar" id="bar">
+    <span class="icon">🔍</span>
+    <input class="inp" id="inp" type="text" autocomplete="off" spellcheck="false"
+           placeholder="Adres veya yer adı ara..." value="{esc_val}">
+    <button class="clr" id="clr" type="button" onclick="doClear()">✕</button>
+  </div>
+  <div class="dd" id="dd"><div id="ddb"></div></div>
+</div>
+<script>
+var NOM="https://nominatim.openstreetmap.org/search";
+var ICONS={{university:"🎓",school:"🏫",college:"🎓",hospital:"🏥",clinic:"🏥",
+  pharmacy:"💊",station:"🚂",halt:"🚉",bus_station:"🚌",fuel:"⛽",parking:"🅿️",
+  restaurant:"🍽️",cafe:"☕",fast_food:"🍔",supermarket:"🛒",bank:"🏦",atm:"💳",
+  mall:"🏬",police:"👮",fire_station:"🚒",post_office:"📮",townhall:"🏛️",
+  mosque:"🕌",place_of_worship:"🕌",sports_centre:"🏋️",stadium:"🏟️",park:"🌳",
+  hotel:"🏨",city:"🏙️",town:"🏘️",village:"🏡",suburb:"📍",neighbourhood:"📍"}};
+var inp=document.getElementById("inp"),dd=document.getElementById("dd"),
+    ddb=document.getElementById("ddb"),bar=document.getElementById("bar"),
+    clr=document.getElementById("clr");
+var results=[],focIdx=-1,timer=null;
+clr.style.display=inp.value?"block":"none";
+inp.addEventListener("focus",function(){{
+  bar.classList.add("focused");
+  if(!inp.value.trim())showRecents();
+  else if(results.length)dd.classList.add("open");
+  resize();
+}});
+inp.addEventListener("blur",function(){{
+  bar.classList.remove("focused");
+  setTimeout(function(){{if(!dd.matches(":hover"))dd.classList.remove("open");resize();}},180);
+}});
+inp.addEventListener("input",function(){{
+  var q=inp.value.trim();
+  clr.style.display=q?"block":"none";
+  clearTimeout(timer);
+  if(!q){{showRecents();return;}}
+  if(q.length<2)return;
+  showSpin();
+  timer=setTimeout(function(){{doSearch(q);}},280);
+}});
+inp.addEventListener("keydown",function(e){{
+  var items=dd.querySelectorAll(".it");
+  if(e.key==="ArrowDown"){{e.preventDefault();focIdx=Math.min(focIdx+1,items.length-1);setFoc(items);}}
+  else if(e.key==="ArrowUp"){{e.preventDefault();focIdx=Math.max(focIdx-1,0);setFoc(items);}}
+  else if(e.key==="Enter"){{e.preventDefault();if(focIdx>=0&&items[focIdx])items[focIdx].click();}}
+  else if(e.key==="Escape"){{dd.classList.remove("open");inp.blur();}}
+}});
+document.addEventListener("click",function(e){{if(!e.target.closest(".wrap"))dd.classList.remove("open");}});
+function setFoc(items){{items.forEach(function(el,i){{el.classList.toggle("foc",i===focIdx);if(i===focIdx)el.scrollIntoView({{block:"nearest"}});}});}}
+async function doSearch(q){{
+  try{{
+    var p=new URLSearchParams({{q:q+", Sakarya",format:"json",limit:10,bounded:1,viewbox:"29.5,41.2,31.5,40.3",countrycodes:"tr",addressdetails:1}});
+    var r=await fetch(NOM+"?"+p,{{headers:{{"Accept-Language":"tr"}}}});
+    var data=await r.json();
+    results=[];
+    var sn=new Set(),sc=new Set();
+    for(var item of data){{
+      var la=parseFloat(item.lat),lo=parseFloat(item.lon);
+      if(la<40.3||la>41.2||lo<29.5||lo>31.5)continue;
+      var ck=Math.round(la*1000)+","+Math.round(lo*1000);
+      if(sc.has(ck))continue;sc.add(ck);
+      var parts=(item.display_name||"").split(",").map(function(s){{return s.trim();}});
+      var prim=parts[0]||"?";
+      if(sn.has(prim.toLowerCase()))continue;sn.add(prim.toLowerCase());
+      var addr=item.address||{{}};
+      var dist=addr.suburb||addr.city_district||addr.quarter||"";
+      var city=addr.city||addr.town||addr.county||"Sakarya";
+      var sub=[dist,city].filter(function(x,i,a){{return x&&x.toLowerCase()!==prim.toLowerCase()&&a.indexOf(x)===i;}}).slice(0,2).join(", ");
+      var ico=ICONS[item.type||""]||ICONS[item["class"]||""]||"📍";
+      var tp=(item.type||"").replace(/_/g," ");
+      results.push({{la:la,lo:lo,name:prim,dn:prim+(dist?", "+dist:"")+(city&&city!==dist?", "+city:""),ico:ico,sub:sub,tp:tp}});
+      if(results.length>=7)break;
+    }}
+    renderResults();
+  }}catch(e){{ddb.innerHTML='<div class="spin">❌ Arama hatası</div>';dd.classList.add("open");resize();}}
+}}
+function showSpin(){{ddb.innerHTML='<div class="spin"><span class="dot"></span>Aranıyor...</div>';dd.classList.add("open");resize();}}
+function renderResults(){{
+  if(!results.length){{ddb.innerHTML='<div class="spin">📭 Sonuç bulunamadı</div>';dd.classList.add("open");resize();return;}}
+  var h="";
+  results.forEach(function(r,i){{
+    h+='<div class="it" data-i="'+i+'" onclick="pick('+i+')">'
+      +'<span class="ico">'+r.ico+'</span>'
+      +'<div class="tx"><div class="p1">'+esc(r.name)+'</div>'
+      +(r.sub?'<div class="p2">'+esc(r.sub)+'</div>':"")
+      +'</div>'+(r.tp?'<span class="tp">'+esc(r.tp)+'</span>':"")
+      +'</div>';
+  }});
+  focIdx=-1;ddb.innerHTML=h;dd.classList.add("open");resize();
+}}
+function getRecents(){{try{{return JSON.parse(localStorage.getItem("snav_{field}")||"[]");}}catch(e){{return[];}}}}
+function saveRecent(r){{try{{var l=getRecents().filter(function(x){{return!(x.la===r.la&&x.lo===r.lo);}});l.unshift(r);localStorage.setItem("snav_{field}",JSON.stringify(l.slice(0,5)));}}catch(e){{}}}}
+function showRecents(){{
+  var recs=getRecents();
+  if(!recs.length){{dd.classList.remove("open");return;}}
+  var h='<div class="sec">Son Aramalar</div>';
+  recs.forEach(function(r,i){{h+='<div class="it" onclick="pickR('+i+')">'
+    +'<span class="ico">🕐</span><div class="tx"><div class="p1">'+esc(r.name)+'</div>'
+    +(r.sub?'<div class="p2">'+esc(r.sub)+'</div>':"")+'</div></div>';
+  }});
+  ddb.innerHTML=h;dd.classList.add("open");resize();
+}}
+function pick(i){{commit(results[i]);}}
+function pickR(i){{var recs=getRecents();if(recs[i])commit(recs[i]);}}
+function commit(r){{
+  inp.value=r.name;clr.style.display="block";
+  dd.classList.remove("open");
+  saveRecent(r);
+  document.getElementById("res_input").value=r.la+","+r.lo+","+encodeURIComponent(r.name)+","+encodeURIComponent(r.dn);
+  document.getElementById("sf").submit();
+}}
+function doClear(){{inp.value="";clr.style.display="none";results=[];focIdx=-1;dd.classList.remove("open");inp.focus();resize();}}
+function esc(s){{return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}}
+function resize(){{setTimeout(function(){{var h=document.body.scrollHeight+6;window.parent&&window.parent.postMessage&&window.parent.postMessage({{type:"streamlit:setFrameHeight",height:Math.max(52,h)}},"*");}},25);}}
+resize();
+</script></body></html>"""
+    components.html(html, height=58, scrolling=False)
 
 
 # ==================== STREAMLIT AYARLARI ====================
@@ -111,9 +298,9 @@ st.markdown("""
         background: linear-gradient(135deg, #b71c1c11, #C6282811);
         border: 1px solid #C6282833;
     }
-    .loc-label  { font-weight: 600; color: #555; font-size: 11px; margin-bottom: 2px; }
-    .loc-name   { font-size: 13px; color: #1a1a1a; font-weight: 500; margin-bottom: 2px; }
-    .loc-coords { font-family: monospace; font-size: 11px; color: #888; }
+    .loc-label  { font-weight: 600; color: #778; font-size: 11px; margin-bottom: 2px; }
+    .loc-name   { font-size: 13px; color: #ccd; font-weight: 500; margin-bottom: 2px; }
+    .loc-coords { font-family: monospace; font-size: 11px; color: #667; }
 
     .click-hint {
         background: #fff9c4; border: 1px solid #f9a825;
@@ -139,6 +326,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── Streamlit Cloud: iframe'lere geolocation izni yama ───────────────────────
+components.html("""
+<script>
+(function(){
+  try{
+    // Bu iframe'e izin ekle
+    var me=window.frameElement;
+    if(me && me.allow && me.allow.indexOf('geolocation')===-1)
+      me.allow=me.allow+'; geolocation *';
+    else if(me && !me.allow) me.allow='geolocation *';
+
+    // Yeni eklenen iframe'leri de yakala
+    new MutationObserver(function(muts){
+      muts.forEach(function(m){
+        m.addedNodes.forEach(function(n){
+          if(!n || n.nodeType!==1) return;
+          var frames=(n.tagName==='IFRAME'?[n]:[]).concat(
+            Array.from(n.querySelectorAll('iframe')));
+          frames.forEach(function(f){
+            if(f.allow && f.allow.indexOf('geolocation')===-1)
+              f.allow=f.allow+'; geolocation *';
+            else if(!f.allow) f.allow='geolocation *';
+          });
+        });
+      });
+    }).observe(window.parent.document.body,{childList:true,subtree:true});
+  }catch(e){}
+})();
+</script>
+""", height=0)
+
 
 # ==================== SESSION STATE ====================
 _SS_DEFAULTS: Dict = {
@@ -156,6 +374,8 @@ _SS_DEFAULTS: Dict = {
     # Searchbox infinite-fire koruması
     '_prev_start_sel': None,
     '_prev_end_sel': None,
+    'start_place_name_short': None,
+    'end_place_name_short':   None,
     '_last_map_click': None,
     # Karşılaştırma
     'comparison_routes': {},
@@ -178,6 +398,9 @@ _SS_DEFAULTS: Dict = {
     'sel_engine': None,
     # Saat (persist)
     'hour': 12,
+    # Alternatif rotalar
+    'alt_routes': [],
+    'sel_alt_idx': 0,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -218,6 +441,47 @@ if _sgeo or _egeo:
     st.query_params.clear()
 
 
+
+
+# ── Adres arama sonucu (query param) ─────────────────────────────────────────
+def _read_search_param(param: str) -> Optional[dict]:
+    """start_search / end_search query param'ını parse et: lat,lon,name,dn"""
+    try:
+        raw = st.query_params.get(param, '')
+        if not raw:
+            return None
+        from urllib.parse import unquote
+        parts = raw.split(',', 3)
+        if len(parts) < 3:
+            return None
+        lat  = float(parts[0])
+        lon  = float(parts[1])
+        name = unquote(parts[2])
+        dn   = unquote(parts[3]) if len(parts) > 3 else name
+        if 40.3 <= lat <= 41.2 and 29.5 <= lon <= 31.5:
+            return {'lat': lat, 'lon': lon, 'name': name, 'display_name': dn}
+    except Exception:
+        pass
+    return None
+
+_sres = _read_search_param('start_search')
+_eres = _read_search_param('end_search')
+
+if _sres:
+    st.session_state.start_lat_live         = _sres['lat']
+    st.session_state.start_lon_live         = _sres['lon']
+    st.session_state.start_place_name       = _sres['display_name']
+    st.session_state.start_place_name_short = _sres['name']
+if _eres:
+    st.session_state.end_lat_live         = _eres['lat']
+    st.session_state.end_lon_live         = _eres['lon']
+    st.session_state.end_place_name       = _eres['display_name']
+    st.session_state.end_place_name_short = _eres['name']
+if _sres or _eres:
+    st.query_params.clear()
+    st.rerun()
+
+
 # ── Sakarya koordinat doğrulama ───────────────────────────────────────────────
 def _is_sakarya(lat, lon) -> bool:
     return (lat is not None and lon is not None
@@ -241,6 +505,8 @@ def load_graph():
     """Graph'ı tek seferlik yükle ve cache'le."""
     with st.spinner("Sakarya yol ağı yükleniyor..."):
         return get_graph_cached()
+
+
 
 
 def _clear_searchbox(field: str) -> None:
@@ -275,6 +541,8 @@ def create_folium_map(
     center_lat        = 40.76, center_lon    = 30.39, zoom = 12,
     comparison_routes : Optional[Dict] = None,
     tile              : str = "OpenStreetMap",
+    alt_routes        : Optional[List[Dict]] = None,
+    sel_alt_idx       : int = 0,
 ):
     m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles=tile)
 
@@ -355,6 +623,60 @@ def create_folium_map(
             m.fit_bounds(
                 [[min(c[0] for c in all_pts), min(c[1] for c in all_pts)],
                  [max(c[0] for c in all_pts), max(c[1] for c in all_pts)]],
+                padding=[55, 55]
+            )
+        return m
+
+    # ── Alternatif rotalar modu ────────────────────────────────────────────
+    if alt_routes and len(alt_routes) > 1:
+        all_coords: List = []
+        # Önce seçili olmayanları çiz (altta kalır)
+        for i, _ar in enumerate(alt_routes):
+            if i == sel_alt_idx:
+                continue
+            _c = _ar.get('coordinates', [])
+            if not _c:
+                continue
+            folium.PolyLine(
+                locations=_c,
+                color=_ar.get('route_color', '#888888'),
+                weight=4, opacity=0.35,
+                tooltip=(f"{_ar.get('route_label','')} | "
+                         f"{_ar['total_distance_m']/1000:.1f} km | "
+                         f"{int(_ar['estimated_time_minutes'])} dk"),
+            ).add_to(m)
+            all_coords.extend(_c)
+        # Seçili rotayı üste çiz
+        _sel = alt_routes[sel_alt_idx]
+        _sc  = _sel.get('coordinates', [])
+        if _sc:
+            folium.PolyLine(
+                locations=_sc,
+                color=_sel.get('route_color', '#1565C0'),
+                weight=6, opacity=0.94,
+                tooltip=(f"{_sel.get('route_label','Rota')} | "
+                         f"{_sel['total_distance_m']/1000:.1f} km | "
+                         f"{int(_sel['estimated_time_minutes'])} dk"),
+            ).add_to(m)
+            all_coords.extend(_sc)
+
+        # Başlangıç / bitiş marker'ları
+        ref = alt_routes[0]
+        for _pt, _col, _lbl in [
+            (ref['start_point'], '#2E7D32', '🟢 Başlangıç'),
+            (ref['end_point'],   '#C62828', '🔴 Bitiş'),
+        ]:
+            folium.CircleMarker(
+                location=list(_pt), radius=12,
+                popup=_lbl, tooltip=_lbl,
+                color='white', fill=True,
+                fillColor=_col, fillOpacity=1.0, weight=3,
+            ).add_to(m)
+
+        if all_coords:
+            m.fit_bounds(
+                [[min(c[0] for c in all_coords), min(c[1] for c in all_coords)],
+                 [max(c[0] for c in all_coords), max(c[1] for c in all_coords)]],
                 padding=[55, 55]
             )
         return m
@@ -555,8 +877,9 @@ def _photon_wrapper_end(query: str, **_):
 
 
 # ── Rota hesapla ──────────────────────────────────────────────────────────────
-def calculate_route(start_lat, start_lon, end_lat, end_lon, vehicle_type, hour):
-    """Rota hesapla, session_state'e kaydet ve geçmişe ekle."""
+def calculate_route(start_lat, start_lon, end_lat, end_lon, vehicle_type, hour,
+                    with_alternatives: bool = True):
+    """Rota hesapla (+ alternatifler), session_state'e kaydet."""
     SLAT, SLON = (40.15, 41.05), (29.8, 31.3)
     for lbl, la, lo in [("Başlangıç", start_lat, start_lon),
                          ("Bitiş",     end_lat,   end_lon)]:
@@ -567,9 +890,21 @@ def calculate_route(start_lat, start_lon, end_lat, end_lon, vehicle_type, hour):
             )
             return None
     try:
-        router     = SmartRouter(st.session_state.graph, vehicle_type, hour)
+        router = SmartRouter(st.session_state.graph, vehicle_type, hour)
         st.session_state.router = router
-        route_info = router.find_route(start_lat, start_lon, end_lat, end_lon)
+
+        if with_alternatives:
+            alt_routes = router.find_alternative_routes(
+                start_lat, start_lon, end_lat, end_lon, n_routes=5
+            )
+            st.session_state.alt_routes  = alt_routes
+            st.session_state.sel_alt_idx = 0
+            route_info = alt_routes[0]
+        else:
+            route_info = router.find_route(start_lat, start_lon, end_lat, end_lon)
+            st.session_state.alt_routes  = [route_info]
+            st.session_state.sel_alt_idx = 0
+
         st.session_state.last_route = route_info
 
         history_item = {
@@ -650,28 +985,74 @@ elif st.session_state.app_page == 'select_type':
     st.markdown("## 🚘 Vasıta Türünü Seçin")
     st.caption("Hangi araç ile gitmek istiyorsunuz?")
     st.markdown("---")
+
+    _COLORS = {'otomobil': '#1565C0', 'arazi_suv': '#2E7D32', 'motosiklet': '#E65100'}
+    _c1, _c2, _c3 = _COLORS['otomobil'], _COLORS['arazi_suv'], _COLORS['motosiklet']
+
+    # Kart görünümü: her sütundaki tek butonu kart stilinde göster
+    st.markdown(f"""
+<style>
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(1)
+    [data-testid="stButton"] > button {{
+    background: linear-gradient(135deg,{_c1}1a,{_c1}0d) !important;
+    border: 2px solid {_c1}44 !important; border-radius: 14px !important;
+    min-height: 200px !important; padding: 22px 14px !important;
+    white-space: pre-wrap !important; line-height: 1.8 !important;
+    font-size: 14px !important; font-weight: 700 !important;
+    color: {_c1} !important; transition: border-color .15s, box-shadow .15s !important;
+}}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(1)
+    [data-testid="stButton"] > button:hover {{
+    border-color: {_c1}99 !important; box-shadow: 0 4px 18px {_c1}33 !important;
+    color: {_c1} !important;
+}}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2)
+    [data-testid="stButton"] > button {{
+    background: linear-gradient(135deg,{_c2}1a,{_c2}0d) !important;
+    border: 2px solid {_c2}44 !important; border-radius: 14px !important;
+    min-height: 200px !important; padding: 22px 14px !important;
+    white-space: pre-wrap !important; line-height: 1.8 !important;
+    font-size: 14px !important; font-weight: 700 !important;
+    color: {_c2} !important; transition: border-color .15s, box-shadow .15s !important;
+}}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2)
+    [data-testid="stButton"] > button:hover {{
+    border-color: {_c2}99 !important; box-shadow: 0 4px 18px {_c2}33 !important;
+    color: {_c2} !important;
+}}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3)
+    [data-testid="stButton"] > button {{
+    background: linear-gradient(135deg,{_c3}1a,{_c3}0d) !important;
+    border: 2px solid {_c3}44 !important; border-radius: 14px !important;
+    min-height: 200px !important; padding: 22px 14px !important;
+    white-space: pre-wrap !important; line-height: 1.8 !important;
+    font-size: 14px !important; font-weight: 700 !important;
+    color: {_c3} !important; transition: border-color .15s, box-shadow .15s !important;
+}}
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3)
+    [data-testid="stButton"] > button:hover {{
+    border-color: {_c3}99 !important; box-shadow: 0 4px 18px {_c3}33 !important;
+    color: {_c3} !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
     _types = [
-        ('otomobil',   '🚗',  'Otomobil',             'Sedan, hatchback, steyşın'),
-        ('arazi_suv',  '🚙',  'Arazi / SUV / Pickup',  'SUV, crossover, pickup kamyonet'),
-        ('motosiklet', '🏍️', 'Motosiklet',             'Naked, sport, scooter'),
+        ('otomobil',   '🚗',  'Otomobil',
+         'Sedan · Hatchback · Station Wagon', ['Şehir içi', 'Uzun yol', 'Yakıt dostu']),
+        ('arazi_suv',  '🚙',  'Arazi / SUV / Pickup',
+         'SUV · Crossover · Pickup',          ['Yüksek çekiş', 'Bozuk yol', 'Off-road']),
+        ('motosiklet', '🏍️', 'Motosiklet',
+         'Naked · Sport · Scooter',           ['Dar sokak', 'Hızlı geçiş', 'Ekonomik']),
     ]
-    for _vtype, _emoji, _label, _desc in _types:
-        _c1, _c2 = st.columns([1, 6])
-        with _c1:
-            st.markdown(
-                f"<div style='font-size:48px;text-align:center;padding-top:4px'>{_emoji}</div>",
-                unsafe_allow_html=True
+    _tc1, _tc2, _tc3 = st.columns(3)
+    for _col, (_vtype, _emoji, _label, _desc, _tags) in zip([_tc1, _tc2, _tc3], _types):
+        with _col:
+            vehicle_type_card(
+                vtype=_vtype, emoji=_emoji, label=_label,
+                desc=_desc, tags=_tags,
+                color=_COLORS.get(_vtype, '#555'),
             )
-        with _c2:
-            if st.button(f"**{_label}**\n\n{_desc}",
-                         use_container_width=True, key=f"type_{_vtype}"):
-                st.session_state.sel_vehicle_type = _vtype
-                st.session_state.sel_brand  = None
-                st.session_state.sel_model  = None
-                st.session_state.sel_engine = None
-                st.session_state.app_page   = 'select_brand'
-                st.rerun()
-        st.markdown("")
 
 
 # ── Sayfa: Marka Seç ──────────────────────────────────────────────────────────
@@ -685,12 +1066,19 @@ elif st.session_state.app_page == 'select_brand':
         st.markdown(f"## {get_display_label(_vtype)} — Marka Seçin")
     st.caption("Sakarya'da popüler markalar"); st.markdown("---")
     _brands = get_brands(_vtype)
-    for _row in [_brands[i:i+3] for i in range(0, len(_brands), 3)]:
-        _cols = st.columns(3)
+    for _row in [_brands[i:i+4] for i in range(0, len(_brands), 4)]:
+        _cols = st.columns(4)
         for _ci, _brand in enumerate(_row):
             with _cols[_ci]:
-                if st.button(f"{BRAND_EMOJI.get(_brand,'🚘')} {_brand}",
-                             use_container_width=True, key=f"brand_{_brand}"):
+                st.markdown(
+                    f"<div style='text-align:center;height:58px;"
+                    f"display:flex;align-items:center;justify-content:center;"
+                    f"margin-bottom:4px;background:rgba(128,128,128,0.07);"
+                    f"border-radius:8px;border:1px solid rgba(128,128,128,0.15)'>"
+                    f"{get_brand_logo_html(_brand)}</div>",
+                    unsafe_allow_html=True
+                )
+                if st.button(_brand, use_container_width=True, key=f"brand_{_brand}"):
                     st.session_state.sel_brand  = _brand
                     st.session_state.sel_model  = None
                     st.session_state.sel_engine = None
@@ -936,46 +1324,18 @@ elif st.session_state.app_page == 'map':
                     _clear_searchbox('start')
                     st.rerun()
 
-        # ── Searchbox ────────────────────────────────────────────────────────
-        if _SEARCHBOX_OK:
-            _start_sel = st_searchbox(
-                _photon_wrapper_start,
-                key="start_searchbox",
-                placeholder="Ör: Sakarya Üniversitesi, Adapazarı Gar, Hastane...",
-                label="🔍 Adres Ara",
-                clear_on_submit=False,
-                debounce=300,
-                rerun_on_update=False,   # Rerunu biz kontrol ediyoruz
+        # ── Arama Kutusu (Google Maps benzeri) ───────────────────────────────
+        _preserve_end_s = {}
+        if st.session_state.end_lat_live:
+            _preserve_end_s['end_geo'] = (
+                f"{st.session_state.end_lat_live},{st.session_state.end_lon_live}"
             )
-            # Sadece değer DEĞİŞTİĞİNDE state'i güncelle (infinite-fire koruması)
-            if _start_sel is not None:
-                _prev_s = st.session_state._prev_start_sel
-                _changed_s = (
-                    _prev_s is None
-                    or _prev_s.get("lat") != _start_sel["lat"]
-                    or _prev_s.get("lon") != _start_sel["lon"]
-                )
-                if _changed_s:
-                    st.session_state._prev_start_sel  = _start_sel
-                    st.session_state.start_lat_live   = _start_sel["lat"]
-                    st.session_state.start_lon_live   = _start_sel["lon"]
-                    st.session_state.start_place_name = _start_sel["display_name"]
-                    st.toast(f"📍 {_start_sel['display_name']} seçildi", icon="✅")
-                    st.rerun()
-        else:
-            # Fallback: searchbox yüklü değilse
-            _sq = st.text_input("🔍 Adres Ara (Sakarya)",
-                                placeholder="Ör: Üniversite, Gar, Hastane...",
-                                key="start_addr_fb")
-            if st.button("Ara", key="search_start_fb"):
-                _res = search_photon(_sq)
-                if _res:
-                    st.session_state.start_lat_live   = _res[0]["lat"]
-                    st.session_state.start_lon_live   = _res[0]["lon"]
-                    st.session_state.start_place_name = _res[0]["display_name"]
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Sonuç bulunamadı.")
+        search_box_html(
+            field="start",
+            color="#1565C0",
+            current_value=st.session_state.get('start_place_name_short') or '',
+            preserve=_preserve_end_s,
+        )
 
         _popular_picks("start")
 
@@ -1017,44 +1377,18 @@ elif st.session_state.app_page == 'map':
                     _clear_searchbox('end')
                     st.rerun()
 
-        # ── Searchbox ────────────────────────────────────────────────────────
-        if _SEARCHBOX_OK:
-            _end_sel = st_searchbox(
-                _photon_wrapper_end,
-                key="end_searchbox",
-                placeholder="Ör: Hendek, Akyazı Devlet Hastanesi, Gar...",
-                label="🔍 Adres Ara",
-                clear_on_submit=False,
-                debounce=300,
-                rerun_on_update=False,
+        # ── Arama Kutusu (Google Maps benzeri) ───────────────────────────────
+        _preserve_start_e = {}
+        if st.session_state.start_lat_live:
+            _preserve_start_e['start_geo'] = (
+                f"{st.session_state.start_lat_live},{st.session_state.start_lon_live}"
             )
-            if _end_sel is not None:
-                _prev_e = st.session_state._prev_end_sel
-                _changed_e = (
-                    _prev_e is None
-                    or _prev_e.get("lat") != _end_sel["lat"]
-                    or _prev_e.get("lon") != _end_sel["lon"]
-                )
-                if _changed_e:
-                    st.session_state._prev_end_sel  = _end_sel
-                    st.session_state.end_lat_live   = _end_sel["lat"]
-                    st.session_state.end_lon_live   = _end_sel["lon"]
-                    st.session_state.end_place_name = _end_sel["display_name"]
-                    st.toast(f"🏁 {_end_sel['display_name']} seçildi", icon="✅")
-                    st.rerun()
-        else:
-            _eq = st.text_input("🔍 Adres Ara (Sakarya)",
-                                placeholder="Ör: Valilik, Gar, Hastane...",
-                                key="end_addr_fb")
-            if st.button("Ara", key="search_end_fb"):
-                _res = search_photon(_eq)
-                if _res:
-                    st.session_state.end_lat_live   = _res[0]["lat"]
-                    st.session_state.end_lon_live   = _res[0]["lon"]
-                    st.session_state.end_place_name = _res[0]["display_name"]
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Sonuç bulunamadı.")
+        search_box_html(
+            field="end",
+            color="#C62828",
+            current_value=st.session_state.get('end_place_name_short') or '',
+            preserve=_preserve_start_e,
+        )
 
         _popular_picks("end")
 
@@ -1138,9 +1472,13 @@ elif st.session_state.app_page == 'map':
                    and st.session_state.comparison_routes
                 else None
             )
+            _has_alts = (
+                not _cmp_routes
+                and len(st.session_state.alt_routes) > 1
+            )
             folium_map = create_folium_map(
                 st.session_state.graph,
-                route_info        = st.session_state.last_route if not _cmp_routes else None,
+                route_info        = st.session_state.last_route if not (_cmp_routes or _has_alts) else None,
                 start_lat_live    = st.session_state.start_lat_live,
                 start_lon_live    = st.session_state.start_lon_live,
                 end_lat_live      = st.session_state.end_lat_live,
@@ -1151,6 +1489,8 @@ elif st.session_state.app_page == 'map':
                 end_geo_lon       = st.session_state.end_geo_lon,
                 comparison_routes = _cmp_routes,
                 tile              = _tile_url,
+                alt_routes        = st.session_state.alt_routes if _has_alts else None,
+                sel_alt_idx       = st.session_state.sel_alt_idx,
             )
 
             # ── Harita click modu ─────────────────────────────────────────────
@@ -1201,6 +1541,49 @@ elif st.session_state.app_page == 'map':
                                  icon="✅")
                     st.rerun()
 
+            # ── Alternatif rota seçici ────────────────────────────────────────
+            if st.session_state.alt_routes and len(st.session_state.alt_routes) > 1:
+                st.markdown("### 🗺️ Rota Seçenekleri")
+                _alts = st.session_state.alt_routes
+                _N_COL = 3
+                for _row_start in range(0, len(_alts), _N_COL):
+                    _row = _alts[_row_start:_row_start + _N_COL]
+                    _rcols = st.columns(len(_row))
+                    for _ci, (_rcol, _ar) in enumerate(zip(_rcols, _row)):
+                        _ai = _row_start + _ci
+                        _is_sel  = (_ai == st.session_state.sel_alt_idx)
+                        _ar_dist = _ar['total_distance_m'] / 1000
+                        _ar_time = int(_ar['estimated_time_minutes'])
+                        _ar_clr  = _ar.get('route_color', '#1565C0')
+                        _border  = _ar_clr if _is_sel else '#3a3d52'
+                        _bg      = f"{_ar_clr}22" if _is_sel else "transparent"
+                        with _rcol:
+                            st.markdown(
+                                f"<div style='border:2px solid {_border};"
+                                f"border-radius:10px;padding:10px 8px;text-align:center;"
+                                f"background:{_bg};margin-bottom:4px'>"
+                                f"<div style='font-size:11px;font-weight:700;"
+                                f"color:{_ar_clr};margin-bottom:4px'>"
+                                f"{_ar.get('route_label','Rota')}</div>"
+                                f"<div style='font-size:13px;font-weight:600;color:#dde'>"
+                                f"{_ar_dist:.1f} km · {_ar_time} dk</div>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                            if _is_sel:
+                                st.markdown(
+                                    "<div style='text-align:center;font-size:11px;"
+                                    "color:#4caf50;padding:2px 0 6px'>✓ Seçili</div>",
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                if st.button("Seç", key=f"sel_alt_{_ai}",
+                                             use_container_width=True):
+                                    st.session_state.sel_alt_idx = _ai
+                                    st.session_state.last_route  = _ar
+                                    st.rerun()
+                st.divider()
+
             # ── Rota bilgisi ──────────────────────────────────────────────────
             if st.session_state.last_route:
                 _r        = st.session_state.last_route
@@ -1210,15 +1593,57 @@ elif st.session_state.app_page == 'map':
                 _vehicle  = _r.get('vehicle_type', 'binek')
                 _dist_km  = _r['total_distance_m'] / 1000
 
+                _rlabel = _r.get('route_label', '✅ Rota Bulundu')
+                _rcolor = _r.get('route_color', '#1b5e20')
                 st.markdown(
-                    f"<div class='route-banner'>"
-                    f"✅ Rota Bulundu &nbsp;|&nbsp; "
+                    f"<div class='route-banner' style='background:linear-gradient(90deg,{_rcolor}cc,{_rcolor})'>"
+                    f"{_rlabel} &nbsp;|&nbsp; "
                     f"📏 {_dist_km:.2f} km &nbsp;|&nbsp; "
                     f"⏱️ {int(_r['estimated_time_minutes'])} dk &nbsp;|&nbsp; "
                     f"{_VEMOJI.get(_vehicle,'🚗')} {_vehicle.capitalize()}"
                     f"</div>",
                     unsafe_allow_html=True
                 )
+
+                # ── Rota Paylaş ───────────────────────────────────────────────
+                with st.expander("🔗 Rotayı Paylaş", expanded=False):
+                    _sp2 = _r['start_point']
+                    _ep2 = _r['end_point']
+
+                    _google_url = (
+                        f"https://www.google.com/maps/dir/"
+                        f"{_sp2[0]:.6f},{_sp2[1]:.6f}/"
+                        f"{_ep2[0]:.6f},{_ep2[1]:.6f}"
+                    )
+                    _yandex_url = (
+                        f"https://yandex.com.tr/harita/?rtext="
+                        f"{_sp2[0]:.6f}%2C{_sp2[1]:.6f}"
+                        f"~{_ep2[0]:.6f}%2C{_ep2[1]:.6f}&rtt=auto"
+                    )
+                    _wa_text = (
+                        f"🗺️ Sakarya Navigasyon Rotası\n"
+                        f"📏 {_dist_km:.1f} km · "
+                        f"⏱️ {int(_r['estimated_time_minutes'])} dk\n"
+                        f"Google Maps: {_google_url}"
+                    )
+                    _wa_url = f"https://wa.me/?text={_urlencode(_wa_text)}"
+
+                    _sh1, _sh2, _sh3 = st.columns(3)
+                    with _sh1:
+                        st.link_button(
+                            "🗺️ Google Maps", _google_url,
+                            use_container_width=True
+                        )
+                    with _sh2:
+                        st.link_button(
+                            "🧭 Yandex Maps", _yandex_url,
+                            use_container_width=True
+                        )
+                    with _sh3:
+                        st.link_button(
+                            "💬 WhatsApp", _wa_url,
+                            use_container_width=True
+                        )
 
                 with st.expander("📊 Rota Detayları", expanded=False):
                     _dc1, _dc2, _dc3 = st.columns(3)
@@ -1254,6 +1679,30 @@ elif st.session_state.app_page == 'map':
                                 f"({_damage['count_bad_surfaces']}/"
                                 f"{_damage['total_surfaces']} kötü yüzey)"
                             )
+
+                    st.divider()
+                    # Karbon emisyonu
+                    _co2 = calculate_carbon_emission(_dist_km, _vehicle)
+                    _ec1, _ec2, _ec3 = st.columns(3)
+                    with _ec1:
+                        st.markdown(
+                            f"<div style='text-align:center;padding:8px'>"
+                            f"<div style='font-size:28px;font-weight:900;"
+                            f"color:{_co2['grade_color']}'>{_co2['grade']}</div>"
+                            f"<div style='font-size:10px;color:#888'>Emisyon Notu</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                    with _ec2:
+                        st.metric("🌿 CO₂", f"{_co2['total_co2_kg']} kg",
+                                  f"{_co2['co2_per_km_g']} g/km",
+                                  delta_color="off")
+                    with _ec3:
+                        st.markdown(
+                            f"<div style='font-size:11px;color:#666;padding-top:12px'>"
+                            f"{_co2['context']}</div>",
+                            unsafe_allow_html=True
+                        )
 
                     st.divider()
                     _cost = vp.calculate_cost_estimate(_dist_km, _surfaces, _mods, _vehicle)

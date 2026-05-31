@@ -380,6 +380,71 @@ class SmartRouter:
 
         return total_seconds / 60  # dakika
     
+    def find_alternative_routes(
+        self,
+        start_lat: float, start_lon: float,
+        end_lat: float,   end_lon: float,
+        n_routes: int = 3,
+    ) -> List[Dict]:
+        """
+        Ana rota + n-1 alternatif bul (kenar cezalandırma yöntemi).
+        Her alternatif, önceki rotaların orta %60'ındaki kenarları ×30 penalize
+        edilmiş grafta hesaplanır.
+        """
+        _LABELS = ['🏆 Önerilen Rota', '🛣️ Alternatif 1', '🗺️ Alternatif 2']
+        _COLORS = ['#1565C0',          '#2E7D32',          '#E65100']
+
+        routes: List[Dict] = []
+
+        main = self.find_route(start_lat, start_lon, end_lat, end_lon)
+        main['route_label'] = _LABELS[0]
+        main['route_color'] = _COLORS[0]
+        main['route_idx']   = 0
+        routes.append(main)
+
+        prev_sets: List[set] = [set(main['nodes'])]
+
+        for attempt in range(n_routes - 1):
+            try:
+                G_alt = self.graph.copy()
+
+                # Tüm bulunan rotaların orta bölümünü cezalandır
+                for r in routes:
+                    nodes = r['nodes']
+                    n = len(nodes)
+                    if n < 6:
+                        continue
+                    s, e = n // 5, 4 * n // 5
+                    for u, v in zip(nodes[s:e], nodes[s + 1:e + 1]):
+                        if v in G_alt[u]:
+                            for k in G_alt[u][v]:
+                                G_alt[u][v][k]['length'] = (
+                                    G_alt[u][v][k].get('length', 50) * 30
+                                )
+
+                alt_r = SmartRouter(G_alt, self.vehicle_type, self.hour)
+                alt   = alt_r.find_route(start_lat, start_lon, end_lat, end_lon)
+
+                # Mevcut rotalardan yeterince farklı mı?
+                alt_set  = set(alt['nodes'])
+                too_same = any(
+                    len(alt_set & ps) / max(len(alt_set), 1) > 0.65
+                    for ps in prev_sets
+                )
+                if too_same:
+                    continue
+
+                idx = len(routes)
+                alt['route_label'] = _LABELS[idx] if idx < len(_LABELS) else f'Alternatif {idx}'
+                alt['route_color'] = _COLORS[idx] if idx < len(_COLORS) else '#888888'
+                alt['route_idx']   = idx
+                routes.append(alt)
+                prev_sets.append(alt_set)
+            except Exception:
+                pass
+
+        return routes
+
     def set_vehicle_type(self, vehicle_type: str) -> None:
         """Araç tipini değiştir"""
         self.vehicle_type = vehicle_type
