@@ -107,9 +107,10 @@ def _subu_watermark() -> None:
     st.markdown(f"""
 <div style="position:fixed;top:0;left:0;width:100%;height:100%;
   display:flex;align-items:center;justify-content:center;
-  opacity:0.07;pointer-events:none;z-index:0">
+  pointer-events:none;z-index:0">
   <img src="{_SUBU_LOGO_URI}"
-       style="width:90vh;max-width:90vw;height:auto;border-radius:24px">
+       style="width:88vh;max-width:88vw;height:auto;
+              opacity:0.10;mix-blend-mode:screen">
 </div>
 """, unsafe_allow_html=True)
 
