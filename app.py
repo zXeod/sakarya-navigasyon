@@ -87,14 +87,30 @@ function getGeo(){{
     components.html(html, height=62)
 
 
-# ── Araç tipi seçim kartı (tüm kart tıklanabilir) ────────────────────────────
+# ── Araç tipi seçim kartı ────────────────────────────────────────────────────
 def vehicle_type_card(vtype: str, emoji: str, label: str, desc: str,
                       tags: list, color: str,
                       preserve: dict | None = None) -> None:
-    """st.button tabanlı araç tipi kartı — sayfa yenilemez, Streamlit state kullanır."""
-    tags_text = " · ".join(tags)
-    if st.button(f"{emoji}  {label}\n{desc}\n{tags_text}",
-                 key=f"vtype_{vtype}", use_container_width=True):
+    """
+    st.markdown (görsel kart) + st.button (aksiyon) kombinasyonu.
+    CSS nth-child trickery yok — her ortamda güvenilir çalışır.
+    """
+    tags_html = "&nbsp;&nbsp;·&nbsp;&nbsp;".join(
+        f"<span style='background:{color}28;color:{color};border-radius:4px;"
+        f"padding:2px 8px;font-size:10px;font-weight:600'>{t}</span>"
+        for t in tags
+    )
+    st.markdown(f"""
+<div style="border:2px solid {color}44;border-radius:14px;
+  background:linear-gradient(135deg,{color}18,{color}08);
+  padding:24px 16px 18px;text-align:center;margin-bottom:6px">
+  <div style="font-size:54px;line-height:1.1;margin-bottom:10px">{emoji}</div>
+  <div style="font-weight:800;font-size:16px;color:{color};margin-bottom:6px">{label}</div>
+  <div style="font-size:11px;color:#778;margin-bottom:12px">{desc}</div>
+  <div style="line-height:2">{tags_html}</div>
+</div>""", unsafe_allow_html=True)
+
+    if st.button(f"Seç", key=f"vtype_{vtype}", use_container_width=True):
         st.session_state.sel_vehicle_type = vtype
         st.session_state.sel_brand        = None
         st.session_state.sel_model        = None
@@ -987,56 +1003,6 @@ elif st.session_state.app_page == 'select_type':
     st.markdown("---")
 
     _COLORS = {'otomobil': '#1565C0', 'arazi_suv': '#2E7D32', 'motosiklet': '#E65100'}
-    _c1, _c2, _c3 = _COLORS['otomobil'], _COLORS['arazi_suv'], _COLORS['motosiklet']
-
-    # Kart görünümü: her sütundaki tek butonu kart stilinde göster
-    st.markdown(f"""
-<style>
-[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(1)
-    [data-testid="stButton"] > button {{
-    background: linear-gradient(135deg,{_c1}1a,{_c1}0d) !important;
-    border: 2px solid {_c1}44 !important; border-radius: 14px !important;
-    min-height: 200px !important; padding: 22px 14px !important;
-    white-space: pre-wrap !important; line-height: 1.8 !important;
-    font-size: 14px !important; font-weight: 700 !important;
-    color: {_c1} !important; transition: border-color .15s, box-shadow .15s !important;
-}}
-[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(1)
-    [data-testid="stButton"] > button:hover {{
-    border-color: {_c1}99 !important; box-shadow: 0 4px 18px {_c1}33 !important;
-    color: {_c1} !important;
-}}
-[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2)
-    [data-testid="stButton"] > button {{
-    background: linear-gradient(135deg,{_c2}1a,{_c2}0d) !important;
-    border: 2px solid {_c2}44 !important; border-radius: 14px !important;
-    min-height: 200px !important; padding: 22px 14px !important;
-    white-space: pre-wrap !important; line-height: 1.8 !important;
-    font-size: 14px !important; font-weight: 700 !important;
-    color: {_c2} !important; transition: border-color .15s, box-shadow .15s !important;
-}}
-[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2)
-    [data-testid="stButton"] > button:hover {{
-    border-color: {_c2}99 !important; box-shadow: 0 4px 18px {_c2}33 !important;
-    color: {_c2} !important;
-}}
-[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3)
-    [data-testid="stButton"] > button {{
-    background: linear-gradient(135deg,{_c3}1a,{_c3}0d) !important;
-    border: 2px solid {_c3}44 !important; border-radius: 14px !important;
-    min-height: 200px !important; padding: 22px 14px !important;
-    white-space: pre-wrap !important; line-height: 1.8 !important;
-    font-size: 14px !important; font-weight: 700 !important;
-    color: {_c3} !important; transition: border-color .15s, box-shadow .15s !important;
-}}
-[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3)
-    [data-testid="stButton"] > button:hover {{
-    border-color: {_c3}99 !important; box-shadow: 0 4px 18px {_c3}33 !important;
-    color: {_c3} !important;
-}}
-</style>
-""", unsafe_allow_html=True)
-
     _types = [
         ('otomobil',   '🚗',  'Otomobil',
          'Sedan · Hatchback · Station Wagon', ['Şehir içi', 'Uzun yol', 'Yakıt dostu']),
