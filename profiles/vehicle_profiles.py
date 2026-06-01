@@ -808,6 +808,11 @@ def calculate_carbon_emission(distance_km: float, vehicle_type: str) -> dict:
     else:
         context = f"✈️ {total_kg / 255:.2f} km uçuşa eşdeğer (kişi başı)"
 
+    # Progress bar değeri: A+ → 0.05 … E → 1.0 (görsel doluluk)
+    _grade_progress = {'A+': 0.05, 'A': 0.20, 'B': 0.40, 'C': 0.60, 'D': 0.80, 'E': 1.0}
+    # Bir ağaç yılda ~21 kg CO₂ emer → eşdeğer ağaç sayısı
+    trees_equiv = round(total_kg / 21.0, 2)
+
     return {
         'co2_per_km_g': base,
         'total_co2_g':  round(total_g),
@@ -815,4 +820,6 @@ def calculate_carbon_emission(distance_km: float, vehicle_type: str) -> dict:
         'grade':        grade,
         'grade_color':  grade_color,
         'context':      context,
+        'progress':     _grade_progress.get(grade, 0.8),
+        'trees_equiv':  trees_equiv,
     }
