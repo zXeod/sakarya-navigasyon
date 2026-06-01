@@ -1,6 +1,7 @@
 """
 Sakarya'da popüler araç katalogu — marka/model/motor seçimi
 """
+import re as _re
 import base64
 
 
@@ -95,9 +96,10 @@ def get_brand_logo_html(brand: str, size: int = 44) -> str:
     return f"<span style='font-size:{size - 8}px'>{BRAND_EMOJI.get(brand, '🚘')}</span>"
 
 VEHICLE_TYPES = {
-    'otomobil': {'label': '🚗 Otomobil', 'routing_profile': 'binek', 'emoji': '🚗'},
-    'arazi_suv': {'label': '🚙 Arazi / SUV / Pickup', 'routing_profile': 'modifiye', 'emoji': '🚙'},
-    'motosiklet': {'label': '🏍️ Motosiklet', 'routing_profile': 'motosiklet', 'emoji': '🏍️'},
+    'otomobil':   {'label': '🚗 Otomobil',               'routing_profile': 'binek',      'emoji': '🚗'},
+    'arazi_suv':  {'label': '🚙 Arazi / SUV / Pickup',   'routing_profile': 'modifiye',   'emoji': '🚙'},
+    'kamyonet':   {'label': '🚐 Kamyonet / Panelvan',    'routing_profile': 'kamyon',     'emoji': '🚐'},
+    'motosiklet': {'label': '🏍️ Motosiklet',              'routing_profile': 'motosiklet', 'emoji': '🏍️'},
 }
 
 BRAND_EMOJI = {
@@ -166,11 +168,12 @@ CATALOG = {
             'Q5': ['2.0 TDI 190bg', '2.0 TFSI 252bg'],
         },
         'BMW': {
-            '1 Serisi': ['116d', '118i', '118d', '120d'],
-            '3 Serisi': ['316i', '318i', '320i', '320d', '330i'],
-            '5 Serisi': ['520i', '520d', '530i'],
-            'X1': ['sDrive18i', 'sDrive20d'],
-            'X3': ['xDrive20d', 'xDrive20i'],
+            '1 Serisi': ['116d 1.5 116bg', '118i 1.5 136bg', '118d 2.0 150bg', '120d 2.0 190bg'],
+            '3 Serisi': ['316i 1.5 122bg', '318i 1.5 136bg', '320i 2.0 184bg', '320d 2.0 190bg', '330i 2.0 258bg'],
+            '5 Serisi': ['520i 2.0 184bg', '520d 2.0 190bg', '530i 2.0 252bg', '530d 3.0 286bg'],
+            'X1':       ['sDrive18i 1.5 140bg', 'sDrive20d 2.0 150bg', 'xDrive20i 2.0 192bg'],
+            'X3':       ['xDrive20d 2.0 190bg', 'xDrive20i 2.0 184bg', 'xDrive30d 3.0 298bg'],
+            'X5':       ['xDrive30d 3.0 286bg', 'xDrive40i 3.0 340bg', 'xDrive45e 3.0 394bg'],
         },
         'Fiat': {
             'Egea':  ['1.4 Fire 95bg', '1.6 Multijet 120bg', '1.3 Multijet 95bg'],
@@ -201,10 +204,11 @@ CATALOG = {
             'Sportage': ['1.6 T-GDI 177bg', '2.0 MPi 163bg'],
         },
         'Mercedes-Benz': {
-            'A Serisi': ['A 180d', 'A 200', 'A 180', 'A 250'],
-            'C Serisi': ['C 180', 'C 200', 'C 220d', 'C 250d'],
-            'E Serisi': ['E 200', 'E 220d', 'E 250'],
-            'GLA': ['GLA 180', 'GLA 200', 'GLA 220d'],
+            'A Serisi': ['A 180d 1.5 116bg', 'A 180 1.3 136bg', 'A 200 1.3 163bg', 'A 250 2.0 224bg'],
+            'C Serisi': ['C 180 1.5 170bg', 'C 200 1.5 204bg', 'C 220d 2.0 200bg', 'C 300 2.0 258bg'],
+            'E Serisi': ['E 200 2.0 197bg', 'E 220d 2.0 194bg', 'E 300 2.0 258bg', 'E 450 3.0 367bg'],
+            'GLA':      ['GLA 180 1.3 136bg', 'GLA 200 1.3 163bg', 'GLA 220d 2.0 190bg', 'GLA 250 2.0 224bg'],
+            'GLC':      ['GLC 200 2.0 204bg', 'GLC 300 2.0 258bg', 'GLC 220d 2.0 194bg'],
         },
         'Nissan': {
             'Qashqai': ['1.3 DIG-T 140bg', '1.5 dCi 115bg', '1.6 dCi 130bg'],
@@ -295,6 +299,42 @@ CATALOG = {
         },
     },
 
+    'kamyonet': {
+        'Ford': {
+            'Transit':       ['2.0 EcoBlue 130bg', '2.0 EcoBlue 170bg', '2.2 TDCi 125bg'],
+            'Transit Custom':['2.0 EcoBlue 105bg', '2.0 EcoBlue 130bg'],
+            'Connect':       ['1.5 EcoBlue 100bg', '1.5 EcoBlue 120bg'],
+        },
+        'Fiat': {
+            'Ducato':        ['2.3 Multijet 120bg', '2.3 Multijet 140bg', '2.3 Multijet 160bg'],
+            'Doblo':         ['1.3 Multijet 90bg',  '1.6 Multijet 120bg'],
+            'Fiorino':       ['1.3 Multijet 75bg',  '1.4 Fire 77bg'],
+        },
+        'Mercedes-Benz': {
+            'Sprinter':      ['2.1 CDI 143bg', '2.1 CDI 163bg', '2.1 CDI 190bg'],
+            'Vito':          ['1.6 CDI 114bg', '2.0 CDI 136bg', '2.0 CDI 163bg'],
+            'Citan':         ['1.5 dCi 90bg',  '1.5 dCi 110bg'],
+        },
+        'Volkswagen': {
+            'Crafter':       ['2.0 TDI 102bg', '2.0 TDI 140bg', '2.0 TDI 177bg'],
+            'Transporter':   ['2.0 TDI 90bg',  '2.0 TDI 150bg', '2.0 TDI 199bg'],
+            'Caddy':         ['2.0 TDI 75bg',  '2.0 TDI 122bg'],
+        },
+        'Peugeot': {
+            'Boxer':         ['2.0 BlueHDi 110bg', '2.0 BlueHDi 130bg', '2.2 BlueHDi 165bg'],
+            'Expert':        ['1.5 BlueHDi 100bg', '2.0 BlueHDi 120bg'],
+            'Partner':       ['1.5 BlueHDi 75bg',  '1.5 BlueHDi 100bg'],
+        },
+        'Renault': {
+            'Master':        ['2.3 dCi 110bg', '2.3 dCi 135bg', '2.3 dCi 170bg'],
+            'Trafic':        ['2.0 dCi 120bg', '2.0 dCi 150bg'],
+            'Kangoo':        ['1.5 dCi 75bg',  '1.5 dCi 95bg',  '1.5 dCi 115bg'],
+        },
+        'Tofas': {
+            'Doblo':         ['1.3 Multijet 90bg', '1.6 Multijet 120bg'],
+        },
+    },
+
     'motosiklet': {
         'Honda': {
             'CB500F': ['471cc 47bg'],
@@ -361,3 +401,48 @@ def get_routing_profile(vehicle_type: str) -> str:
 def get_display_label(vehicle_type: str) -> str:
     """Araç tipi için gösterim etiketi"""
     return VEHICLE_TYPES.get(vehicle_type, {}).get('label', vehicle_type)
+
+
+def get_engine_power_bg(engine_str: str) -> int | None:
+    """
+    Motor string'inden beygir gücü (bg) değerini çıkar.
+    Örnek: '2.0 TDI 150bg' → 150, '471cc 47bg' → 47
+    """
+    m = _re.search(r'(\d+)\s*bg\b', engine_str, _re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+# Kategori başına kabul edilebilir bg aralığı
+_BG_RANGES: dict = {
+    'otomobil':   (50,  600),
+    'arazi_suv':  (70,  600),
+    'kamyonet':   (60,  400),
+    'motosiklet': (5,   300),
+}
+
+
+def validate_catalog() -> list[str]:
+    """
+    Katalogdaki tüm motor string'lerini doğrula.
+    Her giriş 'NUMBERbg' formatında bitmeli ve değer
+    o kategori için makul aralıkta olmalı.
+    Sorunlu girdilerin listesini döndürür (boş liste = temiz).
+    """
+    issues: list[str] = []
+    for cat, brands in CATALOG.items():
+        lo, hi = _BG_RANGES.get(cat, (30, 700))
+        for brand, models in brands.items():
+            for model, engines in models.items():
+                for eng in engines:
+                    pw = get_engine_power_bg(eng)
+                    if pw is None:
+                        issues.append(
+                            f"[FORMAT]  {cat}/{brand}/{model}: "
+                            f"'{eng}' — 'NUMBERbg' kalıbı bulunamadı"
+                        )
+                    elif not (lo <= pw <= hi):
+                        issues.append(
+                            f"[ARALIK]  {cat}/{brand}/{model}: "
+                            f"'{eng}' — {pw}bg beklenen aralık dışı ({lo}–{hi}bg)"
+                        )
+    return issues

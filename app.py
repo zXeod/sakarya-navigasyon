@@ -5,6 +5,7 @@ Sağ kolon: Folium haritası + rota detayları
 v2.1 - dark tema, markdown+button kartlar, Google/Yandex/WhatsApp paylaşım
 """
 
+import os
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
@@ -15,6 +16,12 @@ from typing import Optional, List, Dict
 import pandas as pd
 import streamlit.components.v1 as components
 from urllib.parse import quote as _urlencode
+from streamlit_searchbox import st_searchbox
+try:
+    from streamlit_js_eval import streamlit_js_eval as _js_eval
+    _HAS_JS_EVAL = True
+except ImportError:
+    _HAS_JS_EVAL = False
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -31,43 +38,134 @@ from profiles.vehicle_data import (
 
 
 
-# ==================== GEO BUTTON (declare_component — postMessage protokolü) ====================
-_GEO_COMP = components.declare_component(
-    "sakarya_geo_btn",
-    path=str(Path(__file__).parent / "geo_component"),
-)
+# ==================== GPS KONUM (streamlit-js-eval — iframe/CSP sorunu yok) ====================
+_GPS_JS = """new Promise(function(resolve) {
+    if (!navigator.geolocation) {
+        resolve({error: 'Tarayıcınız konum desteklemiyor'});
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        function(p) {
+            resolve({lat: p.coords.latitude, lon: p.coords.longitude,
+                     acc: Math.round(p.coords.accuracy)});
+        },
+        function(e) {
+            var m = {1:'Konum izni reddedildi', 2:'Sinyal alınamadı', 3:'Zaman aşımı'};
+            resolve({error: m[e.code] || e.message});
+        },
+        {enableHighAccuracy: true, timeout: 15000, maximumAge: 0}
+    );
+})"""
 
 def geo_button_html(field: str, color: str,
                     preserve_start: Optional[tuple] = None,
                     preserve_end: Optional[tuple] = None) -> None:
-    """GPS konum butonu — Streamlit postMessage protokolü ile haberleşir.
-    sandbox/CSP kısıtından etkilenmez, URL manipülasyonu gerekmez."""
-    result = _GEO_COMP(color=color, key=f"geo_btn_{field}", default=None)
+    """GPS konum butonu — streamlit-js-eval ile ana pencerede çalışır.
+    declare_component / iframe / CSP sorunu yoktur."""
+    req_key   = f"_gps_req_{field}"
+    count_key = f"_gps_cnt_{field}"
+
+    if not st.session_state.get(req_key):
+        # Butonu göster
+        st.markdown(
+            f"<style>#gps_wrap_{field} button{{"
+            f"background:{color}!important;color:white!important;"
+            f"border:none!important;border-radius:6px!important;}}</style>"
+            f"<div id='gps_wrap_{field}'>",
+            unsafe_allow_html=True,
+        )
+        if st.button("📍 Mevcut Konumu Kullan",
+                     key=f"gps_btn_{field}",
+                     use_container_width=True):
+            if _HAS_JS_EVAL:
+                st.session_state[req_key]   = True
+                st.session_state[count_key] = st.session_state.get(count_key, 0) + 1
+                st.rerun()
+            else:
+                st.warning("⚠️ streamlit-js-eval paketi eksik. "
+                           "`pip install streamlit-js-eval` çalıştırın.")
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        # GPS alınıyor
+        st.info("📡 Konum alınıyor… tarayıcıda izin verin", icon="📍")
+        _eval_key = f"_gps_eval_{field}_{st.session_state.get(count_key, 0)}"
+        geo = _js_eval(js_expressions=_GPS_JS, key=_eval_key)
+
+        if geo is not None:
+            st.session_state[req_key] = False
+            if "error" in geo:
+                st.error(f"❌ {geo['error']}")
+            else:
+                r_lat = float(geo["lat"])
+                r_lon = float(geo["lon"])
+                acc   = geo.get("acc", "?")
+                # Sakarya sınırı kontrolü
+                if not (40.15 <= r_lat <= 41.05 and 29.8 <= r_lon <= 31.3):
+                    st.warning("⚠️ Konumunuz Sakarya il sınırları dışında.")
+                    return
+                st.session_state[f"{field}_lat_live"]   = r_lat
+                st.session_state[f"{field}_lon_live"]   = r_lon
+                st.session_state[f"{field}_place_name"] = (
+                    f"📍 GPS ({r_lat:.5f}, {r_lon:.5f})"
+                )
+                if field == "start":
+                    st.session_state.start_geo_lat = r_lat
+                    st.session_state.start_geo_lon = r_lon
+                else:
+                    st.session_state.end_geo_lat = r_lat
+                    st.session_state.end_geo_lon = r_lon
+                st.session_state[f"_pending_map_center_{field}"] = (r_lat, r_lon)
+                st.toast(f"✅ Konum alındı (±{acc}m): {r_lat:.5f}, {r_lon:.5f}",
+                         icon="📍")
+                st.rerun()
+
+
+def search_component_handler(field: str, color: str,
+                              current_value: str = "",
+                              placeholder: str = "Adres veya yer adı ara...") -> None:
+    """Anlık Nominatim arama — postMessage protokolü ile Streamlit'e konum iletir.
+    Enter'a gerek yok: yazarken 350ms debounce ile otomatik arama yapar, Top 5 sonuç."""
+    result = _SEARCH_COMP(
+        color=color,
+        field=field,
+        value=current_value,
+        placeholder=placeholder,
+        key=f"{field}_searchbox_comp",
+        default=None,
+    )
     if result is None:
         return
-    r_ts  = result.get("ts", 0)
-    r_lat = result.get("lat")
-    r_lon = result.get("lon")
-    # Daha önce işlenmiş aynı tıklamayı tekrar işleme (sonsuz döngü önlemi)
-    _ts_key = f"_geo_{field}_last_ts"
+    r_ts = result.get("ts", 0)
+    _ts_key = f"_search_{field}_last_ts"
     if r_ts == st.session_state.get(_ts_key):
         return
     st.session_state[_ts_key] = r_ts
-    # Sakarya sınırı kontrolü
-    if (r_lat is None or r_lon is None
-            or not (40.15 <= r_lat <= 41.05 and 29.8 <= r_lon <= 31.3)):
-        st.warning("⚠️ Konumunuz Sakarya il sınırları dışında.")
+
+    # Kullanıcı arama kutusunu temizledi
+    if result.get("action") == "clear":
+        was_set = st.session_state.get(f"{field}_lat_live") is not None
+        st.session_state[f"{field}_lat_live"]        = None
+        st.session_state[f"{field}_lon_live"]        = None
+        st.session_state[f"{field}_place_name"]      = None
+        st.session_state[f"{field}_place_name_short"] = None
+        if was_set:
+            st.rerun()
         return
-    # Session state güncelle
-    st.session_state[f"{field}_lat_live"]   = r_lat
-    st.session_state[f"{field}_lon_live"]   = r_lon
-    st.session_state[f"{field}_place_name"] = f"📍 GPS ({r_lat:.4f}, {r_lon:.4f})"
-    if field == "start":
-        st.session_state.start_geo_lat = r_lat
-        st.session_state.start_geo_lon = r_lon
-    else:
-        st.session_state.end_geo_lat = r_lat
-        st.session_state.end_geo_lon = r_lon
+
+    r_lat = result.get("lat")
+    r_lon = result.get("lon")
+    if r_lat is None or r_lon is None:
+        return
+    if not (40.15 <= r_lat <= 41.05 and 29.8 <= r_lon <= 31.3):
+        st.warning("⚠️ Seçilen konum Sakarya sınırları dışında.")
+        return
+
+    r_name = result.get("name", "")
+    r_dn   = result.get("display_name", r_name)
+    st.session_state[f"{field}_lat_live"]        = r_lat
+    st.session_state[f"{field}_lon_live"]        = r_lon
+    st.session_state[f"{field}_place_name"]      = r_dn
+    st.session_state[f"{field}_place_name_short"] = r_name
     st.rerun()
 
 
@@ -316,6 +414,46 @@ st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem !important; }
 
+    /* ── st_searchbox dark tema override ─────────────────────────────── */
+    [data-baseweb="input"] input,
+    .react-select__control,
+    .react-select__control--is-focused {
+        background-color: #1e2130 !important;
+        border-color: #3a3d52 !important;
+        color: #dde !important;
+        box-shadow: none !important;
+    }
+    .react-select__control--is-focused {
+        border-color: #1565C0 !important;
+        box-shadow: 0 0 0 1px #1565C055 !important;
+    }
+    .react-select__single-value,
+    .react-select__input-container,
+    .react-select__input { color: #dde !important; }
+    .react-select__placeholder { color: #4a4d62 !important; }
+    .react-select__menu {
+        background-color: #1a1d2e !important;
+        border: 1px solid #3a3d52 !important;
+        border-radius: 10px !important;
+    }
+    .react-select__option {
+        background-color: #1a1d2e !important;
+        color: #ccd !important;
+    }
+    .react-select__option--is-focused,
+    .react-select__option--is-selected {
+        background-color: #252840 !important;
+        color: #fff !important;
+    }
+    .react-select__indicator-separator { background-color: #3a3d52 !important; }
+    .react-select__dropdown-indicator,
+    .react-select__clear-indicator { color: #556 !important; }
+    .react-select__dropdown-indicator:hover,
+    .react-select__clear-indicator:hover { color: #99a !important; }
+    /* Searchbox wrapper arka planı */
+    div[data-testid="stHorizontalBlock"] > div > div > div > div[class*="searchbox"],
+    .stSearchbox > div { background: transparent !important; }
+
     .loc-card {
         background: linear-gradient(135deg, #1a237e11, #1565C011);
         border: 1px solid #1565C033;
@@ -343,12 +481,93 @@ st.markdown("""
         border-radius: 8px; padding: 10px 16px;
         color: white; font-weight: 600; font-size: 15px; margin-bottom: 12px;
     }
+    /* Masaüstü: sağ kolon sticky */
     [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child
         > [data-testid="stVerticalBlock"] {
         position: sticky !important;
         top: 3.5rem;
         max-height: calc(100vh - 3.5rem);
         overflow-y: auto;
+    }
+
+    /* ── Mobil görünüm optimizasyonu (≤ 768px) ───────────────────────── */
+    @media (max-width: 768px) {
+        /* Daha az kenar boşluğu */
+        .block-container {
+            padding: 0.5rem 0.5rem 1rem !important;
+        }
+
+        /* Kolonları dikey (alt alta) diz */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+
+        /* Sticky kolon mobilde çalışmaz — devre dışı */
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child
+            > [data-testid="stVerticalBlock"] {
+            position: static !important;
+            max-height: none !important;
+            overflow-y: visible !important;
+        }
+
+        /* Başlıkları küçült */
+        h1 { font-size: 1.35rem !important; }
+        h2 { font-size: 1.1rem  !important; }
+        h3 { font-size: 0.95rem !important; }
+
+        /* Daha büyük dokunmatik buton hedefleri */
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-secondary"] {
+            min-height: 46px !important;
+            font-size: 14px !important;
+        }
+
+        /* Metric kutularını sıkıştır */
+        [data-testid="stMetric"] {
+            padding: 8px 10px !important;
+        }
+        [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+
+        /* Rota banner */
+        .route-banner {
+            font-size: 13px !important;
+            padding: 8px 12px !important;
+        }
+
+        /* Konum kartları */
+        .loc-card { padding: 6px 10px !important; }
+        .loc-name { font-size: 12px !important; }
+
+        /* Radio butonlar yatay → dikey */
+        [data-testid="stRadio"] > div {
+            flex-direction: column !important;
+            gap: 4px !important;
+        }
+
+        /* Dataframe tam genişlik */
+        [data-testid="stDataFrame"] { font-size: 12px !important; }
+
+        /* Harita yüksekliğini küçük ekrana göre azalt */
+        .stFolium iframe { min-height: 320px !important; }
+    }
+
+    /* ── Çok küçük ekranlar (≤ 480px) ───────────────────────────────── */
+    @media (max-width: 480px) {
+        .block-container { padding: 0.25rem 0.25rem 0.75rem !important; }
+        h1 { font-size: 1.15rem !important; }
+
+        /* 2 kolonlu araç kartları da alt alta düşsün */
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 100% !important;
+        }
+
+        /* Metric değerlerini daha küçük tut */
+        [data-testid="stMetricValue"] { font-size: 1rem !important; }
+        [data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -398,9 +617,19 @@ _SS_DEFAULTS: Dict = {
     # Yer adları (loc-card'da gösterilir)
     'start_place_name': None,
     'end_place_name': None,
-    # Searchbox infinite-fire koruması
+    # st_searchbox seçim dedup
     '_prev_start_sel': None,
-    '_prev_end_sel': None,
+    '_prev_end_sel':   None,
+    # Oturum içi arama geçmişi (max 5, her iki kutu için ortak)
+    'recent_searches': [],
+    # st_folium anlık odaklama (GPS / searchbox sonrası tek seferlik)
+    '_pending_map_center_start': None,
+    '_pending_map_center_end':   None,
+    # streamlit-js-eval GPS request flag'leri
+    '_gps_req_start':  False,
+    '_gps_cnt_start':  0,
+    '_gps_req_end':    False,
+    '_gps_cnt_end':    0,
     'start_place_name_short': None,
     'end_place_name_short':   None,
     '_last_map_click': None,
@@ -540,7 +769,27 @@ def create_folium_map(
     alt_routes        : Optional[List[Dict]] = None,
     sel_alt_idx       : int = 0,
 ):
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles=tile)
+    # GPS/live nokta varsa haritayı baştan oraya konumlandır (m.location sonradan
+    # atanması Folium 0.18+ sürümlerde zoom_start'ı güncellemez — constructor'da çözdük)
+    _init_lat, _init_lon, _init_zoom = center_lat, center_lon, zoom
+    if route_info is None and not comparison_routes and not (alt_routes and len(alt_routes) > 1):
+        _cand = [(la, lo) for la, lo in [
+            (start_lat_live, start_lon_live),
+            (end_lat_live,   end_lon_live),
+            (start_geo_lat,  start_geo_lon),
+            (end_geo_lat,    end_geo_lon),
+        ] if la is not None and lo is not None]
+        _seen_k: set = set()
+        _uniq_pts: list = []
+        for _p in _cand:
+            _k = (round(_p[0], 3), round(_p[1], 3))
+            if _k not in _seen_k:
+                _seen_k.add(_k)
+                _uniq_pts.append(_p)
+        if len(_uniq_pts) == 1:
+            _init_lat, _init_lon, _init_zoom = _uniq_pts[0][0], _uniq_pts[0][1], 15
+
+    m = folium.Map(location=[_init_lat, _init_lon], zoom_start=_init_zoom, tiles=tile)
 
     # GPS marker'ları
     for _glat, _glon, _lbl in [
@@ -697,8 +946,12 @@ def create_folium_map(
                 _visible_pts.append([_glat, _glon])
         # Haritayı noktaya/noktalara göre ortala
         if len(_visible_pts) == 1:
-            m.location = _visible_pts[0]
-            m.zoom_start = 15
+            # Tek nokta: küçük bounding box — fit_bounds, constructor'dan daha güvenilir
+            _lat0, _lon0 = _visible_pts[0]
+            _d = 0.004  # ~400 m yarıçap
+            m.fit_bounds(
+                [[_lat0 - _d, _lon0 - _d], [_lat0 + _d, _lon0 + _d]]
+            )
         elif len(_visible_pts) >= 2:
             m.fit_bounds(
                 [[min(p[0] for p in _visible_pts), min(p[1] for p in _visible_pts)],
@@ -790,18 +1043,86 @@ def search_photon(query: str) -> List[Dict]:
         ("place",   "neighbourhood"):   "📍",
     }
 
+    # Türkçe anahtar kelime → OSM amenity/tag eşleştirmesi
+    # "hastane" yazınca yol/cadde değil gerçek hastaneler gelsin
+    _KW_MAP: Dict[str, Dict] = {
+        # Sağlık
+        "hastane":      {"amenitylist": "hospital"},
+        "hastanesi":    {"amenitylist": "hospital"},
+        "klinik":       {"amenitylist": "clinic"},
+        "eczane":       {"amenitylist": "pharmacy"},
+        "diş":          {"amenitylist": "dentist"},
+        # Eğitim
+        "üniversite":   {"amenitylist": "university"},
+        "universite":   {"amenitylist": "university"},
+        "okul":         {"amenitylist": "school"},
+        "ilkokul":      {"amenitylist": "school"},
+        "ortaokul":     {"amenitylist": "school"},
+        "lise":         {"amenitylist": "school"},
+        "kolej":        {"amenitylist": "college"},
+        "anaokul":      {"amenitylist": "kindergarten"},
+        # Ulaşım
+        "gar":          {"amenitylist": "train_station"},
+        "tren":         {"amenitylist": "train_station"},
+        "otogar":       {"amenitylist": "bus_station"},
+        "otobüs":       {"amenitylist": "bus_station"},
+        # Alışveriş
+        "market":       {"amenitylist": "supermarket"},
+        "alışveriş":    {"amenitylist": "mall"},
+        # Kamu
+        "cami":         {"amenitylist": "place_of_worship"},
+        "camii":        {"amenitylist": "place_of_worship"},
+        "polis":        {"amenitylist": "police"},
+        "emniyet":      {"amenitylist": "police"},
+        "belediye":     {"amenitylist": "townhall"},
+        "valilik":      {"amenitylist": "government"},
+        "itfaiye":      {"amenitylist": "fire_station"},
+        "park":         {"amenitylist": "park"},
+        # Benzin / otopark
+        "benzin":       {"amenitylist": "fuel"},
+        "otopark":      {"amenitylist": "parking"},
+    }
+
+    _q = query.strip().lower()
+    _amenity_filter: Optional[str] = None
+    for _kw, _tag in _KW_MAP.items():
+        if _kw in _q:
+            _amenity_filter = _tag["amenitylist"]
+            break
+
+    # Arama parametreleri
+    _base_params: Dict = {
+        "format":       "json",
+        "limit":        10,
+        "bounded":      1,
+        "viewbox":      "29.5,41.2,31.5,40.3",
+        "countrycodes": "tr",
+        "addressdetails": 1,
+    }
+
+    # Yapısal amenity araması (anahtar kelime tespit edildiyse)
+    _amenity_items: list = []
+    if _amenity_filter:
+        try:
+            _ar = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={**_base_params,
+                        "q": f"[amenity={_amenity_filter}], Sakarya",
+                        "limit": 10},
+                timeout=8,
+                headers={"User-Agent": "SakaryaNavApp/1.0"},
+            )
+            _ar.raise_for_status()
+            _amenity_items = _ar.json()
+        except Exception:
+            pass
+
+    # Serbest metin araması (her zaman yapılır, kelime + Sakarya)
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={
-                "q":            f"{query.strip()}, Sakarya",
-                "format":       "json",
-                "limit":        10,
-                "bounded":      1,
-                "viewbox":      "29.5,41.2,31.5,40.3",   # west,north,east,south
-                "countrycodes": "tr",
-                "addressdetails": 1,
-            },
+            params={**_base_params,
+                    "q": f"{query.strip()}, Sakarya"},
             timeout=8,
             headers={
                 "User-Agent": (
@@ -811,9 +1132,12 @@ def search_photon(query: str) -> List[Dict]:
             },
         )
         resp.raise_for_status()
-        items: list = resp.json()
+        # Amenity sonuçlarını öne al, serbest metin sonuçlarını arkaya koy
+        items: list = _amenity_items + resp.json()
     except Exception:
-        return []
+        items = _amenity_items
+        if not items:
+            return []
 
     results: List[Dict] = []
     seen_coords: set = set()
@@ -858,22 +1182,21 @@ def search_photon(query: str) -> List[Dict]:
         addr_parts: list = []
         if district and district.lower() != primary.lower():
             addr_parts.append(district)
-        if city and city.lower() != primary.lower():
+        if city and city.lower() != primary.lower() and city != district:
             addr_parts.append(city)
 
-        subtitle = ", ".join(addr_parts[:2])
-        label = f"{icon} {primary}"
-        if subtitle:
-            label += f"  ·  {subtitle}"
+        # Format: İsim / İlçe / Kısa Adres
+        label_parts = [f"{icon} {primary}"] + addr_parts[:2]
+        label = " / ".join(label_parts)
 
         results.append({
             "label":        label,
             "lat":          lat,
             "lon":          lon,
             "name":         primary,
-            "display_name": f"{primary}, {district or city}",
+            "display_name": ", ".join([primary] + addr_parts[:2]),
         })
-        if len(results) >= 8:
+        if len(results) >= 5:
             break
 
     return results
@@ -1000,17 +1323,29 @@ elif st.session_state.app_page == 'select_type':
     st.caption("Hangi araç ile gitmek istiyorsunuz?")
     st.markdown("---")
 
-    _COLORS = {'otomobil': '#1565C0', 'arazi_suv': '#2E7D32', 'motosiklet': '#E65100'}
+    _COLORS = {
+        'otomobil':   '#1565C0',
+        'arazi_suv':  '#2E7D32',
+        'kamyonet':   '#6A1B9A',
+        'motosiklet': '#E65100',
+    }
     _types = [
         ('otomobil',   '🚗',  'Otomobil',
-         'Sedan · Hatchback · Station Wagon', ['Şehir içi', 'Uzun yol', 'Yakıt dostu']),
+         'Sedan · Hatchback · Station Wagon',
+         ['Şehir içi', 'Uzun yol', 'Yakıt dostu']),
         ('arazi_suv',  '🚙',  'Arazi / SUV / Pickup',
-         'SUV · Crossover · Pickup',          ['Yüksek çekiş', 'Bozuk yol', 'Off-road']),
+         'SUV · Crossover · Off-Road · Pickup',
+         ['Yüksek çekiş', 'Bozuk yol', 'Off-road']),
+        ('kamyonet',   '🚐',  'Kamyonet / Panelvan',
+         'Hafif Ticari · Transit · Panelvan',
+         ['Yük taşıma', 'Şehir içi', 'Ticari']),
         ('motosiklet', '🏍️', 'Motosiklet',
-         'Naked · Sport · Scooter',           ['Dar sokak', 'Hızlı geçiş', 'Ekonomik']),
+         'Naked · Sport · Scooter · Adventure',
+         ['Dar sokak', 'Hızlı geçiş', 'Ekonomik']),
     ]
-    _tc1, _tc2, _tc3 = st.columns(3)
-    for _col, (_vtype, _emoji, _label, _desc, _tags) in zip([_tc1, _tc2, _tc3], _types):
+    _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+    for _col, (_vtype, _emoji, _label, _desc, _tags) in zip(
+            [_tc1, _tc2, _tc3, _tc4], _types):
         with _col:
             vehicle_type_card(
                 vtype=_vtype, emoji=_emoji, label=_label,
@@ -1230,10 +1565,33 @@ elif st.session_state.app_page == 'map':
             st.session_state.graph = load_graph()
 
         with st.expander("ℹ️ Sistem Bilgisi"):
-            graph_info = get_graph_info(st.session_state.graph)
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def _cached_graph_info(_gid: int) -> dict:
+                return get_graph_info(st.session_state.graph)
+            graph_info = _cached_graph_info(id(st.session_state.graph))
             st.metric("Düğüm", f"{graph_info['nodes']:,}")
             st.metric("Kenar", f"{graph_info['edges']:,}")
             st.metric("Cache", f"{graph_info['cache_size_mb']:.1f} MB")
+            _gdate = graph_info.get('cache_date')
+            if _gdate:
+                # Tarih formatı: YYYY-MM-DD HH:MM:SS → daha okunur göster
+                _gdate_short = _gdate[:10]  # "YYYY-MM-DD"
+                try:
+                    from datetime import datetime as _dt
+                    _d = _dt.strptime(_gdate, '%Y-%m-%d %H:%M:%S')
+                    _gdate_short = _d.strftime('%d.%m.%Y %H:%M')
+                except Exception:
+                    pass
+                st.markdown(
+                    f"<div style='margin-top:8px;padding:6px 10px;"
+                    f"background:#1e2130;border:1px solid #2a2d42;"
+                    f"border-radius:6px;font-size:12px;color:#778'>"
+                    f"🗓️ <b>OSM Verisi:</b> {_gdate_short}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("🗓️ OSM tarih bilgisi yok")
 
         st.divider()
 
@@ -1309,18 +1667,29 @@ elif st.session_state.app_page == 'map':
                     _clear_searchbox('start')
                     st.rerun()
 
-        # ── Arama Kutusu (Google Maps benzeri) ───────────────────────────────
-        _preserve_end_s = {}
-        if st.session_state.end_lat_live:
-            _preserve_end_s['end_geo'] = (
-                f"{st.session_state.end_lat_live},{st.session_state.end_lon_live}"
-            )
-        search_box_html(
-            field="start",
-            color="#1565C0",
-            current_value=st.session_state.get('start_place_name_short') or '',
-            preserve=_preserve_end_s,
+        # ── Arama Kutusu (st_searchbox — Enter gerekmez, anlık autocomplete) ──
+        _sel_start = st_searchbox(
+            _photon_wrapper_start,
+            key="start_searchbox",
+            placeholder="🔍 Başlangıç adresi ara...",
+            default=None,
+            default_options=st.session_state.recent_searches,
         )
+        if _sel_start is not None:
+            _sk = (_sel_start.get('lat'), _sel_start.get('lon'))
+            if _sk != st.session_state.get('_prev_start_sel'):
+                st.session_state._prev_start_sel            = _sk
+                st.session_state.start_lat_live             = _sel_start['lat']
+                st.session_state.start_lon_live             = _sel_start['lon']
+                st.session_state.start_place_name           = _sel_start['display_name']
+                st.session_state.start_place_name_short     = _sel_start['name']
+                st.session_state._pending_map_center_start  = _sk
+                # Geçmişe ekle (deduplicate, max 5)
+                _recs = [r for r in st.session_state.recent_searches
+                         if r[1].get('lat') != _sel_start['lat']]
+                st.session_state.recent_searches = (
+                    [(_sel_start['label'], _sel_start)] + _recs
+                )[:5]
 
         _popular_picks("start")
 
@@ -1362,18 +1731,29 @@ elif st.session_state.app_page == 'map':
                     _clear_searchbox('end')
                     st.rerun()
 
-        # ── Arama Kutusu (Google Maps benzeri) ───────────────────────────────
-        _preserve_start_e = {}
-        if st.session_state.start_lat_live:
-            _preserve_start_e['start_geo'] = (
-                f"{st.session_state.start_lat_live},{st.session_state.start_lon_live}"
-            )
-        search_box_html(
-            field="end",
-            color="#C62828",
-            current_value=st.session_state.get('end_place_name_short') or '',
-            preserve=_preserve_start_e,
+        # ── Arama Kutusu (st_searchbox — Enter gerekmez, anlık autocomplete) ──
+        _sel_end = st_searchbox(
+            _photon_wrapper_end,
+            key="end_searchbox",
+            placeholder="🔍 Bitiş adresi ara...",
+            default=None,
+            default_options=st.session_state.recent_searches,
         )
+        if _sel_end is not None:
+            _ek = (_sel_end.get('lat'), _sel_end.get('lon'))
+            if _ek != st.session_state.get('_prev_end_sel'):
+                st.session_state._prev_end_sel              = _ek
+                st.session_state.end_lat_live               = _sel_end['lat']
+                st.session_state.end_lon_live               = _sel_end['lon']
+                st.session_state.end_place_name             = _sel_end['display_name']
+                st.session_state.end_place_name_short       = _sel_end['name']
+                st.session_state._pending_map_center_end    = _ek
+                # Geçmişe ekle (deduplicate, max 5)
+                _recs = [r for r in st.session_state.recent_searches
+                         if r[1].get('lat') != _sel_end['lat']]
+                st.session_state.recent_searches = (
+                    [(_sel_end['label'], _sel_end)] + _recs
+                )[:5]
 
         _popular_picks("end")
 
@@ -1492,12 +1872,34 @@ elif st.session_state.app_page == 'map':
                     unsafe_allow_html=True
                 )
 
+            # ── Debug: session state (yalnızca SAKARYA_DEBUG=1 ile görünür) ───
+            if os.getenv("SAKARYA_DEBUG"):
+                with st.expander("🐛 Debug — Session State", expanded=False):
+                    st.write({k: v for k, v in st.session_state.items()
+                              if not k.startswith('FormSubmitter')})
+
+            # ── st_folium center: GPS / searchbox sonrası tek seferlik odakla ─
+            _st_center = None
+            _st_zoom   = None
+            for _pf in ('start', 'end'):
+                _pk = f"_pending_map_center_{_pf}"
+                _pending = st.session_state.get(_pk)
+                if _pending:
+                    _st_center = list(_pending)
+                    _st_zoom   = 15
+                    st.session_state[_pk] = None  # tek seferlik — tüketildi
+                    break
+
             # ── Harita ───────────────────────────────────────────────────────
-            _map_key = "map_{}_{}_{}_{}".format(
+            _map_key = "map_{}_{}_{}_{}_{}_{}_{}_{}" .format(
                 st.session_state.start_lat_live,
                 st.session_state.start_lon_live,
                 st.session_state.end_lat_live,
                 st.session_state.end_lon_live,
+                st.session_state.start_geo_lat,
+                st.session_state.start_geo_lon,
+                st.session_state.end_geo_lat,
+                st.session_state.end_geo_lon,
             )
             map_data = st_folium(
                 folium_map,
@@ -1505,6 +1907,8 @@ elif st.session_state.app_page == 'map':
                 height=560,
                 returned_objects=["last_clicked"],
                 key=_map_key,
+                center=_st_center,
+                zoom=_st_zoom,
             )
 
             # ── Tıklama işle ──────────────────────────────────────────────────
@@ -1596,45 +2000,40 @@ elif st.session_state.app_page == 'map':
                     unsafe_allow_html=True
                 )
 
-                # ── Rota Paylaş ───────────────────────────────────────────────
-                with st.expander("🔗 Rotayı Paylaş", expanded=False):
-                    _sp2 = _r['start_point']
-                    _ep2 = _r['end_point']
-
-                    _google_url = (
-                        f"https://www.google.com/maps/dir/"
-                        f"{_sp2[0]:.6f},{_sp2[1]:.6f}/"
-                        f"{_ep2[0]:.6f},{_ep2[1]:.6f}"
-                    )
-                    _yandex_url = (
-                        f"https://yandex.com.tr/harita/?rtext="
-                        f"{_sp2[0]:.6f}%2C{_sp2[1]:.6f}"
-                        f"~{_ep2[0]:.6f}%2C{_ep2[1]:.6f}&rtt=auto"
-                    )
-                    _wa_text = (
-                        f"🗺️ Sakarya Navigasyon Rotası\n"
-                        f"📏 {_dist_km:.1f} km · "
-                        f"⏱️ {int(_r['estimated_time_minutes'])} dk\n"
-                        f"Google Maps: {_google_url}"
-                    )
-                    _wa_url = f"https://wa.me/?text={_urlencode(_wa_text)}"
-
-                    _sh1, _sh2, _sh3 = st.columns(3)
-                    with _sh1:
-                        st.link_button(
-                            "🗺️ Google Maps", _google_url,
-                            use_container_width=True
-                        )
-                    with _sh2:
-                        st.link_button(
-                            "🧭 Yandex Maps", _yandex_url,
-                            use_container_width=True
-                        )
-                    with _sh3:
-                        st.link_button(
-                            "💬 WhatsApp", _wa_url,
-                            use_container_width=True
-                        )
+                # ── Rota Paylaş — haritanın altında direkt 3 buton ──────────
+                _sp2 = _r['start_point']
+                _ep2 = _r['end_point']
+                _google_url = (
+                    f"https://www.google.com/maps/dir/"
+                    f"{_sp2[0]:.6f},{_sp2[1]:.6f}/"
+                    f"{_ep2[0]:.6f},{_ep2[1]:.6f}"
+                )
+                _yandex_url = (
+                    f"https://yandex.com.tr/harita/?rtext="
+                    f"{_sp2[0]:.6f}%2C{_sp2[1]:.6f}"
+                    f"~{_ep2[0]:.6f}%2C{_ep2[1]:.6f}&rtt=auto"
+                )
+                _wa_text = (
+                    f"🗺️ Sakarya Navigasyon Rotası\n"
+                    f"📏 {_dist_km:.1f} km · "
+                    f"⏱️ {int(_r['estimated_time_minutes'])} dk\n"
+                    f"Google Maps: {_google_url}"
+                )
+                _wa_url = f"https://wa.me/?text={_urlencode(_wa_text)}"
+                _bs = ("display:inline-flex;align-items:center;justify-content:center;"
+                       "padding:8px 4px;border-radius:8px;font-size:13px;font-weight:600;"
+                       "cursor:pointer;text-decoration:none;border:1px solid #3a3d52;"
+                       "color:#ccd;background:#1e2130;width:100%;gap:5px;")
+                st.markdown(
+                    f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;'
+                    f'gap:8px;margin:8px 0 4px;">'
+                    f'<a href="{_google_url}" target="_blank" style="{_bs}">🗺️ Google Maps</a>'
+                    f'<a href="{_yandex_url}" target="_blank" style="{_bs}">🧭 Yandex Maps</a>'
+                    f'<a href="{_wa_url}" target="_blank" '
+                    f'style="{_bs}background:#1a3a27;border-color:#2e7d32;color:#a5d6a7;">'
+                    f'💬 WhatsApp</a></div>',
+                    unsafe_allow_html=True,
+                )
 
                 with st.expander("📊 Rota Detayları", expanded=False):
                     _dc1, _dc2, _dc3 = st.columns(3)
@@ -1672,28 +2071,34 @@ elif st.session_state.app_page == 'map':
                             )
 
                     st.divider()
-                    # Karbon emisyonu
+                    # Karbon emisyonu — görsel progress bar
                     _co2 = calculate_carbon_emission(_dist_km, _vehicle)
-                    _ec1, _ec2, _ec3 = st.columns(3)
-                    with _ec1:
+                    _cv1, _cv2 = st.columns([1, 3])
+                    with _cv1:
                         st.markdown(
-                            f"<div style='text-align:center;padding:8px'>"
-                            f"<div style='font-size:28px;font-weight:900;"
-                            f"color:{_co2['grade_color']}'>{_co2['grade']}</div>"
-                            f"<div style='font-size:10px;color:#888'>Emisyon Notu</div>"
+                            f"<div style='text-align:center;padding:10px 4px 4px'>"
+                            f"<div style='font-size:36px;font-weight:900;"
+                            f"color:{_co2['grade_color']};line-height:1'>{_co2['grade']}</div>"
+                            f"<div style='font-size:10px;color:#778;margin-top:4px'>Emisyon Notu</div>"
                             f"</div>",
-                            unsafe_allow_html=True
+                            unsafe_allow_html=True,
                         )
-                    with _ec2:
-                        st.metric("🌿 CO₂", f"{_co2['total_co2_kg']} kg",
-                                  f"{_co2['co2_per_km_g']} g/km",
-                                  delta_color="off")
-                    with _ec3:
+                    with _cv2:
                         st.markdown(
-                            f"<div style='font-size:11px;color:#666;padding-top:12px'>"
-                            f"{_co2['context']}</div>",
-                            unsafe_allow_html=True
+                            f"<div style='padding-top:6px'>"
+                            f"<span style='font-size:13px;font-weight:600;color:#ccd'>🌿 CO₂ Emisyonu</span>"
+                            f"&nbsp;&nbsp;<span style='color:#778;font-size:12px'>"
+                            f"{_co2['co2_per_km_g']} g/km · {_co2['total_co2_kg']} kg toplam</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
                         )
+                        st.progress(_co2['progress'])
+                        _trees = _co2['trees_equiv']
+                        _tree_txt = (
+                            f"🌳 {_trees:.2f} ağacın yıllık CO₂ emilimine eşdeğer"
+                            if _trees >= 0.01 else "🌱 Neredeyse sıfır emisyon"
+                        )
+                        st.caption(f"{_co2['context']}  ·  {_tree_txt}")
 
                     st.divider()
                     _cost = vp.calculate_cost_estimate(_dist_km, _surfaces, _mods, _vehicle)
@@ -1709,6 +2114,42 @@ elif st.session_state.app_page == 'map':
                         st.metric("Toplam", f"{_cost['total_cost_tl']} TL",
                                   f"{_cost['cost_per_km']} TL/km",
                                   delta_color="off")
+
+                # ── Adım Adım Yol Tarifi ─────────────────────────────────────
+                if st.session_state.router and _r.get('nodes'):
+                    with st.expander("🧭 Adım Adım Yol Tarifi", expanded=False):
+                        try:
+                            _steps = st.session_state.router.generate_turn_instructions(
+                                _r['nodes']
+                            )
+                            if _steps:
+                                _dist_acc = 0.0
+                                for _si, _step in enumerate(_steps):
+                                    _dist_acc += _step['distance_m']
+                                    _road_txt = (
+                                        f" &nbsp;·&nbsp; <span style='color:#778'>"
+                                        f"{_step['road']}</span>"
+                                        if _step['road'] else ""
+                                    )
+                                    st.markdown(
+                                        f"<div style='padding:4px 0;font-size:13px'>"
+                                        f"<span style='font-family:monospace;color:#667'>"
+                                        f"{_si+1:2d}.</span> "
+                                        f"<span style='font-size:16px'>{_step['icon']}</span> "
+                                        f"<b>{_step['text']}</b>{_road_txt}"
+                                        f"<span style='color:#556;font-size:11px;float:right'>"
+                                        f"{_step['distance_m']:.0f} m</span></div>",
+                                        unsafe_allow_html=True,
+                                    )
+                                st.caption(
+                                    f"Toplam {len(_steps)} adım · "
+                                    f"{_dist_km:.1f} km · "
+                                    f"{int(_r['estimated_time_minutes'])} dk"
+                                )
+                            else:
+                                st.caption("Rota çok kısa, yön talimatı yok.")
+                        except Exception as _te:
+                            st.caption(f"Yol tarifi oluşturulamadı: {_te}")
 
                 # ── Karşılaştırma ─────────────────────────────────────────────
                 st.divider()
@@ -1797,6 +2238,64 @@ elif st.session_state.app_page == 'map':
                                 f"{_costs_cmp[_best]:.0f} TL  "
                                 f"(diğerlerine göre {_saving:.0f} TL tasarruf)"
                             )
+
+                            # ── Araç bazlı adım adım yol tarifi ──────────────
+                            if st.session_state.graph:
+                                st.markdown(
+                                    "<div style='margin-top:12px;font-size:12px;"
+                                    "color:#778;font-weight:600;letter-spacing:.5px'>"
+                                    "🧭 ARAÇ BAZLI YOL TARİFİ</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                _CMP_LABELS_TF = {
+                                    'binek':      '🚗 Binek',
+                                    'kamyon':     '🚛 Kamyon',
+                                    'modifiye':   '🚙 Modifiye',
+                                    'motosiklet': '🏍️ Motosiklet',
+                                }
+                                for _vt_tf, _ri_tf in _routes_cmp.items():
+                                    if not _ri_tf.get('nodes'):
+                                        continue
+                                    _tf_label = _CMP_LABELS_TF.get(_vt_tf, _vt_tf.capitalize())
+                                    _tf_dk = _ri_tf['total_distance_m'] / 1000
+                                    _tf_dk_str = f"{_tf_dk:.1f} km · {int(_ri_tf['estimated_time_minutes'])} dk"
+                                    with st.expander(
+                                        f"{_tf_label} — {_tf_dk_str}",
+                                        expanded=False,
+                                    ):
+                                        try:
+                                            _router_tf = SmartRouter(
+                                                st.session_state.graph, _vt_tf, _hv
+                                            )
+                                            _steps_tf = _router_tf.generate_turn_instructions(
+                                                _ri_tf['nodes']
+                                            )
+                                            if _steps_tf:
+                                                for _si_tf, _step_tf in enumerate(_steps_tf):
+                                                    _road_tf = (
+                                                        f" &nbsp;·&nbsp; <span style='color:#778'>"
+                                                        f"{_step_tf['road']}</span>"
+                                                        if _step_tf['road'] else ""
+                                                    )
+                                                    st.markdown(
+                                                        f"<div style='padding:3px 0;font-size:12px'>"
+                                                        f"<span style='font-family:monospace;"
+                                                        f"color:#667'>{_si_tf+1:2d}.</span> "
+                                                        f"<span style='font-size:14px'>"
+                                                        f"{_step_tf['icon']}</span> "
+                                                        f"<b>{_step_tf['text']}</b>{_road_tf}"
+                                                        f"<span style='color:#556;font-size:11px;"
+                                                        f"float:right'>{_step_tf['distance_m']:.0f} m"
+                                                        f"</span></div>",
+                                                        unsafe_allow_html=True,
+                                                    )
+                                                st.caption(
+                                                    f"Toplam {len(_steps_tf)} adım · {_tf_dk_str}"
+                                                )
+                                            else:
+                                                st.caption("Rota çok kısa, yön talimatı yok.")
+                                        except Exception as _e_tf:
+                                            st.caption(f"Yol tarifi oluşturulamadı: {_e_tf}")
                     except Exception as _e:
                         st.error(f"❌ Karşılaştırma hatası: {_e}")
         else:

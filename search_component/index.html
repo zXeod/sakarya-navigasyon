@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: transparent;
+  padding: 2px 1px 1px;
+}
+:root { --accent: #1565C0; }
+.wrapper { position: relative; width: 100%; }
+
+.search-bar {
+  display: flex; align-items: center; gap: 7px;
+  background: #1e2130; border: 1.5px solid #3a3d52;
+  border-radius: 22px; padding: 9px 13px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-bar.focused {
+  border-color: var(--accent);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 27%, transparent);
+}
+.s-icon { font-size: 14px; color: #556; flex-shrink: 0; }
+.s-input {
+  flex: 1; border: none; outline: none;
+  font-size: 13.5px; color: #dde;
+  background: transparent; min-width: 0;
+}
+.s-input::placeholder { color: #4a4d62; }
+.s-clear {
+  background: none; border: none; cursor: pointer;
+  color: #556; font-size: 14px; padding: 2px 5px;
+  border-radius: 50%; display: none; flex-shrink: 0;
+  line-height: 1;
+}
+.s-clear:hover { background: #2a2d42; color: #99a; }
+
+.dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: #1a1d2e; border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.55);
+  border: 1px solid #3a3d52; z-index: 9999;
+  overflow: hidden; display: none; max-height: 320px; overflow-y: auto;
+}
+.dropdown.open { display: block; }
+
+.sec-label {
+  font-size: 10px; font-weight: 700; color: #556;
+  letter-spacing: 1.2px; padding: 9px 13px 3px;
+  text-transform: uppercase;
+}
+.item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 13px; cursor: pointer;
+  transition: background .07s; user-select: none;
+}
+.item:hover, .item.focused { background: #252840; }
+.item-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+.item-text { flex: 1; min-width: 0; }
+.item-primary {
+  font-size: 13px; color: #ccd; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.item-secondary {
+  font-size: 11px; color: #667;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 1px;
+}
+.item-type {
+  font-size: 10px; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border-radius: 4px; padding: 1px 5px;
+  white-space: nowrap; flex-shrink: 0;
+}
+.status {
+  display: flex; align-items: center; gap: 7px;
+  padding: 14px 13px; color: #667; font-size: 12px;
+}
+.spin {
+  display: inline-block; width: 12px; height: 12px;
+  border: 2px solid #3a3d52; border-top-color: var(--accent);
+  border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="search-bar" id="bar">
+    <span class="s-icon">🔍</span>
+    <input type="text" class="s-input" id="inp" autocomplete="off" spellcheck="false"
+           placeholder="Adres veya yer adı ara...">
+    <button class="s-clear" id="clrBtn" onclick="clearSearch()">✕</button>
+  </div>
+  <div class="dropdown" id="dd">
+    <div id="ddBody"></div>
+  </div>
+</div>
+
+<script>
+// ── Streamlit component protocol ──────────────────────────────────────────────
+function sendReady()  { window.parent.postMessage({ type:"streamlit:componentReady", apiVersion:1 }, "*"); }
+function sendHeight(h){ window.parent.postMessage({ type:"streamlit:setFrameHeight", height:h }, "*"); }
+function sendValue(v) { window.parent.postMessage({ type:"streamlit:setComponentValue", value:v }, "*"); }
+sendReady();
+
+// ── Config ───────────────────────────────────────────────────────────────────
+var CFG = { color:"#1565C0", field:"start" };
+var state = { results:[], focusIdx:-1, timer:null };
+
+var inp    = document.getElementById('inp');
+var dd     = document.getElementById('dd');
+var ddBody = document.getElementById('ddBody');
+var clrBtn = document.getElementById('clrBtn');
+var bar    = document.getElementById('bar');
+
+var NOM = "https://nominatim.openstreetmap.org/search";
+
+var ICONS = {
+  university:"🎓",school:"🏫",college:"🎓",tutoring:"📚",driving_school:"🚗",
+  kindergarten:"🧒",hospital:"🏥",clinic:"🏥",pharmacy:"💊",dentist:"🦷",
+  doctors:"👨‍⚕️",station:"🚂",halt:"🚉",bus_station:"🚌",bus_stop:"🚌",
+  fuel:"⛽",parking:"🅿️",restaurant:"🍽️",cafe:"☕",fast_food:"🍔",
+  supermarket:"🛒",bank:"🏦",atm:"💳",mall:"🏬",police:"👮",
+  fire_station:"🚒",post_office:"📮",townhall:"🏛️",courthouse:"⚖️",
+  mosque:"🕌",place_of_worship:"🕌",sports_centre:"🏋️",stadium:"🏟️",
+  park:"🌳",hotel:"🏨",motel:"🏨",city:"🏙️",town:"🏘️",village:"🏡",
+  suburb:"📍",neighbourhood:"📍",quarter:"📍",
+};
+function getIcon(cls, type) {
+  return ICONS[type] || ICONS[cls] || ICONS[cls+"_"+type] || "📍";
+}
+
+// ── Streamlit props ───────────────────────────────────────────────────────────
+window.addEventListener("message", function(e) {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  var args = e.data.args || {};
+  if (args.color) { CFG.color = args.color; setAccent(args.color); }
+  if (args.field) { CFG.field = args.field; }
+  if (args.placeholder) { inp.placeholder = args.placeholder; }
+  // Restore displayed value on rerun if input is empty
+  if (args.value && !inp.value) {
+    inp.value = args.value;
+    clrBtn.style.display = "block";
+  }
+  updateHeight();
+});
+
+function setAccent(c) {
+  document.documentElement.style.setProperty('--accent', c);
+}
+
+// ── Recent searches (per-field localStorage) ──────────────────────────────────
+function getRecents() {
+  try { return JSON.parse(localStorage.getItem('snav_r_'+CFG.field)||'[]'); }
+  catch(e) { return []; }
+}
+function saveRecent(r) {
+  try {
+    var list = getRecents().filter(function(x){ return !(x.lat===r.lat&&x.lon===r.lon); });
+    list.unshift(r);
+    localStorage.setItem('snav_r_'+CFG.field, JSON.stringify(list.slice(0,5)));
+  } catch(e) {}
+}
+
+// ── Input events ──────────────────────────────────────────────────────────────
+inp.addEventListener('focus', function() {
+  bar.classList.add('focused');
+  var q = inp.value.trim();
+  if (!q) renderRecents();
+  else if (state.results.length) openDD();
+  updateHeight();
+});
+inp.addEventListener('blur', function() {
+  bar.classList.remove('focused');
+  setTimeout(function() {
+    if (!dd.matches(':hover')) closeDD();
+  }, 180);
+});
+inp.addEventListener('input', function() {
+  var q = inp.value.trim();
+  clrBtn.style.display = q ? 'block' : 'none';
+  clearTimeout(state.timer);
+  if (!q) { renderRecents(); return; }
+  if (q.length < 2) return;
+  showSpinner();
+  // Uyarlanabilir debounce: kısa sorgu → daha fazla bekleme (gereksiz istek azaltır)
+  // 2-3 karakter: 550ms | 4-5: 380ms | 6+: 230ms
+  var delay = q.length >= 6 ? 230 : q.length >= 4 ? 380 : 550;
+  state.timer = setTimeout(function() { doSearch(q); }, delay);
+});
+inp.addEventListener('keydown', function(e) {
+  var items = dd.querySelectorAll('.item');
+  if (e.key==='ArrowDown') {
+    e.preventDefault();
+    state.focusIdx = Math.min(state.focusIdx+1, items.length-1);
+    setFocus(items);
+  } else if (e.key==='ArrowUp') {
+    e.preventDefault();
+    state.focusIdx = Math.max(state.focusIdx-1, 0);
+    setFocus(items);
+  } else if (e.key==='Enter') {
+    e.preventDefault();
+    if (state.focusIdx>=0 && items[state.focusIdx]) items[state.focusIdx].click();
+  } else if (e.key==='Escape') {
+    closeDD(); inp.blur();
+  }
+});
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.wrapper')) closeDD();
+});
+function setFocus(items) {
+  items.forEach(function(el,i) {
+    el.classList.toggle('focused', i===state.focusIdx);
+    if (i===state.focusIdx) el.scrollIntoView({block:'nearest'});
+  });
+}
+
+// ── Nominatim search ──────────────────────────────────────────────────────────
+async function doSearch(q) {
+  try {
+    var params = new URLSearchParams({
+      q: q+', Sakarya', format:'json', limit:10,
+      bounded:1, viewbox:'29.5,41.2,31.5,40.3',
+      countrycodes:'tr', addressdetails:1,
+    });
+    var res  = await fetch(NOM+'?'+params, { headers:{'Accept-Language':'tr'} });
+    var data = await res.json();
+
+    state.results = [];
+    var seenNames  = new Set();
+    var seenCoords = new Set();
+
+    for (var item of data) {
+      var lat = parseFloat(item.lat), lon = parseFloat(item.lon);
+      if (lat<40.3||lat>41.2||lon<29.5||lon>31.5) continue;
+      var ck = Math.round(lat*1000)+','+Math.round(lon*1000);
+      if (seenCoords.has(ck)) continue; seenCoords.add(ck);
+
+      var parts   = (item.display_name||'').split(',').map(function(s){return s.trim();});
+      var primary = parts[0]||'?';
+      var nk      = primary.toLowerCase();
+      if (seenNames.has(nk)) continue; seenNames.add(nk);
+
+      var addr     = item.address||{};
+      var district = addr.suburb||addr.city_district||addr.quarter||'';
+      var city     = addr.city||addr.town||addr.county||'Sakarya';
+      var sub = [district, city].filter(function(x,i,a){
+        return x && x.toLowerCase()!==primary.toLowerCase() && a.indexOf(x)===i;
+      }).slice(0,2).join(' / ');
+
+      var cls  = item['class']||'';
+      var type = item.type||'';
+
+      state.results.push({
+        lat:lat, lon:lon, name:primary,
+        display_name: primary+(district?', '+district:'')+(city&&city!==district?', '+city:''),
+        icon: getIcon(cls,type),
+        subtitle: sub,
+        typeLabel: type ? type.replace(/_/g,' ') : '',
+      });
+      if (state.results.length>=5) break;
+    }
+    renderResults();
+  } catch(err) {
+    ddBody.innerHTML='<div class="status">❌ Arama başarısız</div>';
+    openDD(); updateHeight();
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function showSpinner() {
+  ddBody.innerHTML='<div class="status"><span class="spin"></span>Aranıyor...</div>';
+  openDD(); updateHeight();
+}
+function renderResults() {
+  if (!state.results.length) {
+    ddBody.innerHTML='<div class="status">📭 Sonuç bulunamadı</div>';
+    openDD(); updateHeight(); return;
+  }
+  var html='';
+  state.results.forEach(function(r,i) {
+    html+='<div class="item" onclick="pick('+i+')">'
+      +'<span class="item-icon">'+r.icon+'</span>'
+      +'<div class="item-text">'
+      +'<div class="item-primary">'+esc(r.name)+'</div>'
+      +(r.subtitle?'<div class="item-secondary">'+esc(r.subtitle)+'</div>':'')
+      +'</div>'
+      +(r.typeLabel?'<span class="item-type">'+esc(r.typeLabel)+'</span>':'')
+      +'</div>';
+  });
+  state.focusIdx=-1;
+  ddBody.innerHTML=html;
+  openDD(); updateHeight();
+}
+function renderRecents() {
+  var recs=getRecents();
+  if (!recs.length) { closeDD(); return; }
+  var html='<div class="sec-label">Son Aramalar</div>';
+  recs.forEach(function(r,i) {
+    html+='<div class="item" onclick="pickRecent('+i+')">'
+      +'<span class="item-icon">🕐</span>'
+      +'<div class="item-text">'
+      +'<div class="item-primary">'+esc(r.name)+'</div>'
+      +(r.subtitle?'<div class="item-secondary">'+esc(r.subtitle)+'</div>':'')
+      +'</div></div>';
+  });
+  ddBody.innerHTML=html;
+  openDD(); updateHeight();
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+function pick(idx) { commit(state.results[idx]); }
+function pickRecent(idx) { var r=getRecents()[idx]; if(r) commit(r); }
+function commit(r) {
+  inp.value=r.name;
+  clrBtn.style.display='block';
+  closeDD();
+  saveRecent(r);
+  sendValue({ lat:r.lat, lon:r.lon, name:r.name, display_name:r.display_name, ts:Date.now() });
+  updateHeight();
+}
+function clearSearch() {
+  var hadValue = !!inp.value;
+  inp.value='';
+  clrBtn.style.display='none';
+  state.results=[]; state.focusIdx=-1;
+  closeDD();
+  if (hadValue) sendValue({ action:'clear', ts:Date.now() });
+  inp.focus();
+  updateHeight();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function openDD()  { dd.classList.add('open');    updateHeight(); }
+function closeDD() { dd.classList.remove('open'); updateHeight(); }
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function updateHeight() {
+  setTimeout(function() {
+    sendHeight(Math.max(50, document.body.scrollHeight+6));
+  }, 20);
+}
+
+// Init
+setAccent(CFG.color);
+updateHeight();
+</script>
+</body>
+</html>

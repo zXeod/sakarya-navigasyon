@@ -6,7 +6,7 @@ Ağırlıklı Dijkstra algoritması + araç profilleri
 from typing import List, Tuple, Dict, Optional
 from collections import defaultdict
 import heapq
-import math
+import math  # bearing hesapları için
 
 import networkx as nx
 import osmnx as ox
@@ -380,70 +380,227 @@ class SmartRouter:
 
         return total_seconds / 60  # dakika
     
+    # Yol konfor faktörleri — "En Kolay" stratejisi için
+    _ROAD_EASE: Dict[str, float] = {
+        'motorway': 0.40,      'motorway_link': 0.50,
+        'trunk':    0.50,      'trunk_link':    0.60,
+        'primary':  0.70,      'primary_link':  0.75,
+        'secondary':0.90,      'secondary_link':0.95,
+        'tertiary': 1.20,      'tertiary_link': 1.30,
+        'residential': 2.00,   'living_street': 3.00,
+        'service':  2.50,      'track':         3.00,
+        'unclassified': 1.40,
+    }
+
+    def _edge_weight_by_strategy(self, u: int, v: int, k: int,
+                                  strategy: str) -> float:
+        """Stratejiye göre tek kenar ağırlığı döndür."""
+        try:
+            data    = self.graph.edges[u, v, k]
+            length  = data.get('length', 50)
+            highway = data.get('highway', 'unclassified')
+            if isinstance(highway, list):
+                highway = highway[0]
+
+            if strategy == 'ekonomik':
+                return length                                      # salt mesafe
+
+            if strategy == 'hizli':
+                speeds     = HIGHWAY_SPEEDS.get(highway, (45, 35))
+                speed_kmh  = (speeds[1] if self.is_rush_hour else speeds[0])
+                speed_kmh *= VEHICLE_SPEED_FACTORS.get(self.vehicle_type, 1.0)
+                speed_kmh  = max(speed_kmh, 5.0)
+                return (length / 1000) / speed_kmh * 3600         # saniye
+
+            # kolay: büyük yolları tercih et
+            return length * self._ROAD_EASE.get(highway, 1.30)
+
+        except (KeyError, TypeError):
+            return float('inf')
+
+    def _dijkstra_by_strategy(self, start_node: int, end_node: int,
+                               strategy: str) -> Optional[List[int]]:
+        """Strateji ağırlıklı özel Dijkstra — grafiği değiştirmez."""
+        dist: Dict[int, float] = {}
+        dist[start_node] = 0.0
+        prev: Dict[int, Optional[int]] = {start_node: None}
+        pq: list = [(0.0, start_node)]
+        visited: set = set()
+
+        while pq:
+            cur_d, cur = heapq.heappop(pq)
+            if cur in visited:
+                continue
+            visited.add(cur)
+            if cur == end_node:
+                break
+            for nbr in self.graph.successors(cur):
+                if nbr in visited:
+                    continue
+                w = min(
+                    self._edge_weight_by_strategy(cur, nbr, k, strategy)
+                    for k in self.graph[cur][nbr]
+                )
+                nd = cur_d + w
+                if nd < dist.get(nbr, float('inf')):
+                    dist[nbr] = nd
+                    prev[nbr] = cur
+                    heapq.heappush(pq, (nd, nbr))
+
+        if end_node not in prev:
+            return None
+        path: List[int] = []
+        node: Optional[int] = end_node
+        while node is not None:
+            path.append(node)
+            node = prev.get(node)
+        path.reverse()
+        return path
+
     def find_alternative_routes(
         self,
         start_lat: float, start_lon: float,
         end_lat: float,   end_lon: float,
-        n_routes: int = 3,
+        n_routes: int = 3,          # parametre korunuyor (geriye dönük uyum)
     ) -> List[Dict]:
         """
-        Ana rota + n-1 alternatif bul (kenar cezalandırma yöntemi).
-        Her alternatif, önceki rotaların orta %60'ındaki kenarları ×30 penalize
-        edilmiş grafta hesaplanır.
+        3 farklı optimizasyon stratejisi ile rota hesaplar:
+          ⚡ En Hızlı  — seyahat süresi minimizasyonu (trafik dahil)
+          🛣️ En Kolay  — büyük/rahat yolları tercih (konforlu sürüş)
+          💰 En Ekonomik — salt mesafe minimizasyonu (yakıt tasarrufu)
         """
-        _LABELS = ['🏆 Önerilen Rota', '🛣️ Alternatif 1', '🗺️ Alternatif 2']
-        _COLORS = ['#1565C0',          '#2E7D32',          '#E65100']
+        STRATEGIES = [
+            ('hizli',    '⚡ En Hızlı',    '#2E7D32'),
+            ('kolay',    '🛣️ En Kolay',    '#1565C0'),
+            ('ekonomik', '💰 En Ekonomik', '#E65100'),
+        ]
+
+        start_node = ox.nearest_nodes(self.graph, start_lon, start_lat)
+        end_node   = ox.nearest_nodes(self.graph, end_lon,   end_lat)
 
         routes: List[Dict] = []
 
-        main = self.find_route(start_lat, start_lon, end_lat, end_lon)
-        main['route_label'] = _LABELS[0]
-        main['route_color'] = _COLORS[0]
-        main['route_idx']   = 0
-        routes.append(main)
-
-        prev_sets: List[set] = [set(main['nodes'])]
-
-        for attempt in range(n_routes - 1):
+        for strategy, label, color in STRATEGIES:
             try:
-                G_alt = self.graph.copy()
-
-                # Tüm bulunan rotaların orta bölümünü cezalandır
-                for r in routes:
-                    nodes = r['nodes']
-                    n = len(nodes)
-                    if n < 6:
-                        continue
-                    s, e = n // 5, 4 * n // 5
-                    for u, v in zip(nodes[s:e], nodes[s + 1:e + 1]):
-                        if v in G_alt[u]:
-                            for k in G_alt[u][v]:
-                                G_alt[u][v][k]['length'] = (
-                                    G_alt[u][v][k].get('length', 50) * 30
-                                )
-
-                alt_r = SmartRouter(G_alt, self.vehicle_type, self.hour)
-                alt   = alt_r.find_route(start_lat, start_lon, end_lat, end_lon)
-
-                # Mevcut rotalardan yeterince farklı mı?
-                alt_set  = set(alt['nodes'])
-                too_same = any(
-                    len(alt_set & ps) / max(len(alt_set), 1) > 0.65
-                    for ps in prev_sets
-                )
-                if too_same:
+                nodes = self._dijkstra_by_strategy(start_node, end_node, strategy)
+                if not nodes:
                     continue
 
-                idx = len(routes)
-                alt['route_label'] = _LABELS[idx] if idx < len(_LABELS) else f'Alternatif {idx}'
-                alt['route_color'] = _COLORS[idx] if idx < len(_COLORS) else '#888888'
-                alt['route_idx']   = idx
-                routes.append(alt)
-                prev_sets.append(alt_set)
+                coords   = self._extract_route_geometry(nodes)
+                surfaces = self._extract_route_surfaces(nodes)
+                distance = self._calculate_route_distance(nodes)
+                time_min = self._calculate_route_time(nodes)
+                cost     = sum(
+                    min(self.calculate_edge_weight(u, v, k) for k in self.graph[u][v])
+                    for u, v in zip(nodes[:-1], nodes[1:])
+                    if v in self.graph[u]
+                )
+
+                routes.append({
+                    'nodes':                nodes,
+                    'coordinates':          coords,
+                    'start_point':          (start_lat, start_lon),
+                    'end_point':            (end_lat,   end_lon),
+                    'total_distance_m':     distance,
+                    'total_cost':           cost,
+                    'estimated_time_minutes': time_min,
+                    'vehicle_type':         self.vehicle_type,
+                    'hour':                 self.hour,
+                    'traffic_factor':       self.traffic_factor,
+                    'surfaces':             surfaces,
+                    'route_label':          label,
+                    'route_color':          color,
+                    'route_strategy':       strategy,
+                    'route_idx':            len(routes),
+                })
             except Exception:
                 pass
 
+        # Hiç rota bulunamadıysa tek rota döndür
+        if not routes:
+            r = self.find_route(start_lat, start_lon, end_lat, end_lon)
+            r['route_label'] = '⚡ En Hızlı'
+            r['route_color'] = '#2E7D32'
+            r['route_idx']   = 0
+            routes.append(r)
+
         return routes
+
+    def _edge_bearing(self, u: int, v: int) -> float:
+        """İki kavşak düğümü arasındaki coğrafi yönü hesapla (0–360°)."""
+        n1 = self.graph.nodes[u]
+        n2 = self.graph.nodes[v]
+        lat1 = math.radians(n1['y']);  lon1 = math.radians(n1['x'])
+        lat2 = math.radians(n2['y']);  lon2 = math.radians(n2['x'])
+        dlon = lon2 - lon1
+        x = math.sin(dlon) * math.cos(lat2)
+        y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+        return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+    def generate_turn_instructions(self, route_nodes: List[int]) -> List[Dict]:
+        """
+        Kavşak düğümleri arasındaki bearing farkından adım adım yön talimatları üretir.
+        Ardışık talimatlar birleştirilir (ör. 3 × 'Düz devam et' → tek satır).
+        """
+        if len(route_nodes) < 3:
+            return []
+
+        _TURN = [
+            (-180, -90,  '↰', 'Keskin sola dön'),
+            ( -90, -25,  '↖', 'Sola dön'),
+            ( -25,  25,  '↑', 'Düz devam et'),
+            (  25,  90,  '↗', 'Sağa dön'),
+            (  90, 180,  '↱', 'Keskin sağa dön'),
+        ]
+
+        raw: List[Dict] = []
+        for i in range(1, len(route_nodes) - 1):
+            u, v, w = route_nodes[i - 1], route_nodes[i], route_nodes[i + 1]
+
+            in_b  = self._edge_bearing(u, v)
+            out_b = self._edge_bearing(v, w)
+            diff  = (out_b - in_b + 360) % 360
+            if diff > 180:
+                diff -= 360  # negatif = sol
+
+            icon, text = '↑', 'Düz devam et'
+            for lo, hi, ic, tx in _TURN:
+                if lo <= diff < hi:
+                    icon, text = ic, tx
+                    break
+
+            # Gelen kenarın uzunluğu
+            best_k   = min(self.graph[u][v],
+                           key=lambda k: self.graph[u][v][k].get('length', 9999))
+            seg_m    = self.graph.edges[u, v, best_k].get('length', 0)
+
+            # Sonraki yolun adı — boşsa OSM ref ile fallback (E-5, D-100 vb.)
+            best_k2  = min(self.graph[v][w],
+                           key=lambda k: self.graph[v][w][k].get('length', 9999))
+            _edata   = self.graph.edges[v, w, best_k2]
+            road     = _edata.get('name', '')
+            if isinstance(road, list):
+                road = road[0] if road else ''
+            if not road:
+                _ref = _edata.get('ref', '')
+                if isinstance(_ref, list):
+                    _ref = _ref[0] if _ref else ''
+                road = _ref
+
+            raw.append({'icon': icon, 'text': text,
+                        'road': road, 'distance_m': seg_m})
+
+        # Ardışık "Düz devam et" talimatlarını birleştir
+        merged: List[Dict] = []
+        for step in raw:
+            if (merged and step['text'] == merged[-1]['text'] == 'Düz devam et'):
+                merged[-1]['distance_m'] += step['distance_m']
+                if step['road'] and not merged[-1]['road']:
+                    merged[-1]['road'] = step['road']
+            else:
+                merged.append(dict(step))
+
+        return merged
 
     def set_vehicle_type(self, vehicle_type: str) -> None:
         """Araç tipini değiştir"""

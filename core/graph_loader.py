@@ -78,9 +78,8 @@ def save_graph_to_file(graph: nx.MultiDiGraph) -> None:
     """
     ensure_data_dir()
     
-    # Graph'ı pickle ile sıkıştırılmış format da kaydet
     with open(CACHE_FILE, 'wb') as f:
-        pickle.dump(graph, f)
+        pickle.dump(graph, f, protocol=pickle.HIGHEST_PROTOCOL)
     
     # Metadata kaydı
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
@@ -163,6 +162,17 @@ def get_graph_info(graph: Optional[nx.MultiDiGraph] = None) -> dict:
         sf = data.get('surface', 'unknown')
         surface_types[sf] = surface_types.get(sf, 0) + 1
 
+    # Metadata dosyasından indirme/güncelleme tarihini oku
+    cache_date: Optional[str] = None
+    if METADATA_FILE.exists():
+        try:
+            for _line in METADATA_FILE.read_text(encoding='utf-8').splitlines():
+                if _line.startswith('İndir Tarihi:'):
+                    cache_date = _line.split(':', 1)[1].strip()
+                    break
+        except Exception:
+            pass
+
     return {
         'nodes': len(graph.nodes),
         'edges': len(graph.edges),
@@ -173,6 +183,7 @@ def get_graph_info(graph: Optional[nx.MultiDiGraph] = None) -> dict:
         'top_surfaces': sorted(surface_types.items(), key=lambda x: x[1], reverse=True)[:5],
         'cache_exists': CACHE_FILE.exists(),
         'cache_size_mb': CACHE_FILE.stat().st_size / (1024 * 1024) if CACHE_FILE.exists() else 0,
+        'cache_date': cache_date,
     }
 
 
