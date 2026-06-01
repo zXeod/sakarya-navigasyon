@@ -31,73 +31,44 @@ from profiles.vehicle_data import (
 
 
 
-# ==================== GEO BUTTON (query_params tabanlı) ====================
+# ==================== GEO BUTTON (declare_component — postMessage protokolü) ====================
+_GEO_COMP = components.declare_component(
+    "sakarya_geo_btn",
+    path=str(Path(__file__).parent / "geo_component"),
+)
+
 def geo_button_html(field: str, color: str,
                     preserve_start: Optional[tuple] = None,
                     preserve_end: Optional[tuple] = None) -> None:
-    """GPS konum butonu. Konum alındığında form submit (target=_top, action=/) ile query_params iletir."""
-    # Korunacak diğer koordinatı form hidden input olarak yaz
-    preserve_js_form = ""
-    if field == "start" and preserve_end:
-        preserve_js_form = (f'<input type="hidden" name="end_geo" '
-                            f'value="{preserve_end[0]},{preserve_end[1]}">')
-    elif field == "end" and preserve_start:
-        preserve_js_form = (f'<input type="hidden" name="start_geo" '
-                            f'value="{preserve_start[0]},{preserve_start[1]}">')
-
-    html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:2px;background:transparent}}
-.btn{{display:block;width:100%;padding:8px 12px;font-size:13px;cursor:pointer;
-      border:none;border-radius:6px;color:white;background:{color};
-      font-weight:500;transition:opacity .15s}}
-.btn:hover:not(:disabled){{opacity:.85}}
-.btn:disabled{{opacity:.5;cursor:default}}
-#msg{{font-size:11px;margin-top:5px;min-height:14px;color:#667}}
-</style></head><body>
-<form id="gf" method="GET" target="_top" action="/">
-  <input type="hidden" name="{field}_geo" id="coords">
-  <input type="hidden" name="_page" value="main_map">
-  {preserve_js_form}
-</form>
-<button class="btn" id="btn" onclick="getGeo()">📍 Mevcut Konumu Kullan</button>
-<div id="msg"></div>
-<script>
-function getGeo(){{
-  var btn=document.getElementById('btn'),msg=document.getElementById('msg');
-  btn.disabled=true; msg.style.color='#888'; msg.textContent='⏳ Konum alınıyor...';
-
-  // Önce parent frame'in geolocation'ını dene (iframe izin kısıtını aşar)
-  var geo=null;
-  try{{
-    if(window.parent&&window.parent.navigator&&window.parent.navigator.geolocation)
-      geo=window.parent.navigator.geolocation;
-  }}catch(e){{}}
-  if(!geo) geo=navigator.geolocation;
-
-  if(!geo){{
-    msg.style.color='#e53935'; msg.textContent='❌ Tarayıcınız konum desteklemiyor';
-    btn.disabled=false; return;
-  }}
-
-  function onSuccess(pos){{
-    var lat=pos.coords.latitude.toFixed(6), lon=pos.coords.longitude.toFixed(6);
-    msg.style.color='#4caf50'; msg.textContent='✅ '+lat+', '+lon;
-    document.getElementById('coords').value=lat+','+lon;
-    document.getElementById('gf').submit();
-  }}
-
-  function onError(err){{
-    var m={{1:'❌ Konum izni reddedildi — tarayıcı adres çubuğundaki kilit simgesine tıklayın',2:'❌ Konum sinyali alınamadı',3:'❌ Zaman aşımı — tekrar deneyin'}};
-    msg.style.color='#e53935'; msg.textContent=m[err.code]||('❌ '+err.message);
-    btn.disabled=false;
-  }}
-
-  geo.getCurrentPosition(onSuccess,onError,{{enableHighAccuracy:true,timeout:12000,maximumAge:0}});
-}}
-</script></body></html>"""
-    components.html(html, height=62)
+    """GPS konum butonu — Streamlit postMessage protokolü ile haberleşir.
+    sandbox/CSP kısıtından etkilenmez, URL manipülasyonu gerekmez."""
+    result = _GEO_COMP(color=color, key=f"geo_btn_{field}", default=None)
+    if result is None:
+        return
+    r_ts  = result.get("ts", 0)
+    r_lat = result.get("lat")
+    r_lon = result.get("lon")
+    # Daha önce işlenmiş aynı tıklamayı tekrar işleme (sonsuz döngü önlemi)
+    _ts_key = f"_geo_{field}_last_ts"
+    if r_ts == st.session_state.get(_ts_key):
+        return
+    st.session_state[_ts_key] = r_ts
+    # Sakarya sınırı kontrolü
+    if (r_lat is None or r_lon is None
+            or not (40.15 <= r_lat <= 41.05 and 29.8 <= r_lon <= 31.3)):
+        st.warning("⚠️ Konumunuz Sakarya il sınırları dışında.")
+        return
+    # Session state güncelle
+    st.session_state[f"{field}_lat_live"]   = r_lat
+    st.session_state[f"{field}_lon_live"]   = r_lon
+    st.session_state[f"{field}_place_name"] = f"📍 GPS ({r_lat:.4f}, {r_lon:.4f})"
+    if field == "start":
+        st.session_state.start_geo_lat = r_lat
+        st.session_state.start_geo_lon = r_lon
+    else:
+        st.session_state.end_geo_lat = r_lat
+        st.session_state.end_geo_lon = r_lon
+    st.rerun()
 
 
 # ── SUBÜ logo (assets/subu_logo.png dosyasından oku, base64 URI'ye çevir) ────
@@ -463,44 +434,7 @@ for _k, _v in _SS_DEFAULTS.items():
         st.session_state[_k] = _v
 
 
-# ── GPS query params ──────────────────────────────────────────────────────────
-def _read_geo_param(param_name: str) -> Optional[tuple]:
-    try:
-        raw = st.query_params.get(param_name, "")
-        if not raw:
-            return None
-        lat, lon = map(float, raw.split(','))
-        if 40.15 <= lat <= 41.05 and 29.8 <= lon <= 31.3:
-            return (lat, lon)
-    except Exception:
-        pass
-    return None
-
-_sgeo = _read_geo_param('start_geo')
-_egeo = _read_geo_param('end_geo')
-
-if _sgeo:
-    st.session_state.start_geo_lat    = _sgeo[0]
-    st.session_state.start_geo_lon    = _sgeo[1]
-    st.session_state.start_lat_live   = _sgeo[0]
-    st.session_state.start_lon_live   = _sgeo[1]
-    st.session_state.start_place_name = f"📍 GPS ({_sgeo[0]:.4f}, {_sgeo[1]:.4f})"
-
-if _egeo:
-    st.session_state.end_geo_lat    = _egeo[0]
-    st.session_state.end_geo_lon    = _egeo[1]
-    st.session_state.end_lat_live   = _egeo[0]
-    st.session_state.end_lon_live   = _egeo[1]
-    st.session_state.end_place_name = f"📍 GPS ({_egeo[0]:.4f}, {_egeo[1]:.4f})"
-
-# _page param ile app_page'i koruyoruz (JS'den gelen)
-_page_from_url = st.query_params.get('_page', '')
-if _page_from_url == 'main_map':
-    st.session_state.app_page = 'main_map'
-
-if _sgeo or _egeo:
-    st.query_params.clear()
-    st.rerun()
+# GPS query params artık declare_component ile işleniyor — URL tabanlı okuma kaldırıldı
 
 
 

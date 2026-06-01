@@ -70,7 +70,7 @@ function getGeo() {
       var lon = parseFloat(pos.coords.longitude.toFixed(6));
       msg.style.color = "#2e7d32";
       msg.textContent = "✅ " + lat + ", " + lon;
-      sendValue({ lat: lat, lon: lon });
+      sendValue({ lat: lat, lon: lon, ts: Date.now() });
       btn.disabled = false;
     },
     function(err) {
