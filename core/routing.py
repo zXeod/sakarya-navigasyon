@@ -62,14 +62,14 @@ class SmartRouter:
         """
         self.graph = graph
         self.vehicle_type = vehicle_type
-        self.hour = hour
+        self.hour = int(hour)  # slider/session_state bazen str döndürebilir
 
         # Profil ve trafik çarpanını önceden yükle
         self.profile = get_vehicle_profile(vehicle_type)
-        self.traffic_factor = get_traffic_factor(vehicle_type, hour)
+        self.traffic_factor = get_traffic_factor(vehicle_type, self.hour)
 
         # Yoğun saatler: hafta içi 07:00-09:00 ve 17:00-19:30
-        self.is_rush_hour = (7 <= hour <= 9) or (17 <= hour <= 19)
+        self.is_rush_hour = (7 <= self.hour <= 9) or (17 <= self.hour <= 19)
     
     def calculate_edge_weight(self, u: int, v: int, key: int = 0) -> float:
         """

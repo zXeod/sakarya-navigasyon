@@ -472,17 +472,43 @@ st.markdown("""
     .react-select__dropdown-indicator:hover,
     .react-select__clear-indicator:hover { color: #99a !important; }
 
-    /* Streamlit searchbox wrapper'ı — beyaz arka planı sıfırla */
+    /* Streamlit searchbox wrapper — tüm çocukları karart */
+    [data-testid="stSearchbox"],
     [data-testid="stSearchbox"] > div,
     [data-testid="stSearchbox"] > div > div,
     [data-testid="stSearchbox"] label + div,
-    .stSearchbox,
-    .stSearchbox > div,
-    div[class*="searchbox"] { background: transparent !important; }
+    [data-testid="stSearchbox"] * { background-color: transparent !important; }
 
-    /* stSearchbox içindeki tüm div arka planları */
-    [data-testid="stSearchbox"] div[class*="react-select"] {
+    /* react-select içindeki beyaz kutuyu geçersiz kıl */
+    [data-testid="stSearchbox"] .react-select__control,
+    [data-testid="stSearchbox"] .react-select__control--is-focused,
+    [data-testid="stSearchbox"] .react-select__control--menu-is-open,
+    [data-testid="stSearchbox"] .react-select__value-container,
+    [data-testid="stSearchbox"] .react-select__value-container--has-value,
+    [data-testid="stSearchbox"] .react-select__input-container {
         background-color: #1e2130 !important;
+        border-color: #3a3d52 !important;
+        color: #dde !important;
+    }
+    [data-testid="stSearchbox"] .react-select__input,
+    [data-testid="stSearchbox"] .react-select__input input,
+    [data-testid="stSearchbox"] .react-select__single-value {
+        color: #dde !important;
+        background-color: transparent !important;
+    }
+    [data-testid="stSearchbox"] .react-select__menu,
+    [data-testid="stSearchbox"] .react-select__menu-list {
+        background-color: #1a1d2e !important;
+        border: 1px solid #3a3d52 !important;
+    }
+    [data-testid="stSearchbox"] .react-select__option {
+        background-color: #1a1d2e !important;
+        color: #ccd !important;
+    }
+    [data-testid="stSearchbox"] .react-select__option--is-focused,
+    [data-testid="stSearchbox"] .react-select__option--is-selected {
+        background-color: #252840 !important;
+        color: #fff !important;
     }
 
     /* Baseweb input override */
@@ -2213,7 +2239,7 @@ elif st.session_state.app_page == 'map':
                     try:
                         _sp2 = _r['start_point']
                         _ep2 = _r['end_point']
-                        _hv  = _r['hour']
+                        _hv  = int(_r['hour'])  # slider bazen str döndürebilir
 
                         if not st.session_state.comparison_routes:
                             _routes_cmp: Dict = {}
