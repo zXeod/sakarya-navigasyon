@@ -35,14 +35,15 @@ from profiles.vehicle_data import (
 def geo_button_html(field: str, color: str,
                     preserve_start: Optional[tuple] = None,
                     preserve_end: Optional[tuple] = None) -> None:
-    """GPS konum butonu. Konum alındığında form submit ile query_params güncellenir."""
-    preserve_html = ""
+    """GPS konum butonu. Konum alındığında form submit (target=_top, action=/) ile query_params iletir."""
+    # Korunacak diğer koordinatı form hidden input olarak yaz
+    preserve_js_form = ""
     if field == "start" and preserve_end:
-        preserve_html = (f'<input type="hidden" name="end_geo" '
-                         f'value="{preserve_end[0]},{preserve_end[1]}">')
+        preserve_js_form = (f'<input type="hidden" name="end_geo" '
+                            f'value="{preserve_end[0]},{preserve_end[1]}">')
     elif field == "end" and preserve_start:
-        preserve_html = (f'<input type="hidden" name="start_geo" '
-                         f'value="{preserve_start[0]},{preserve_start[1]}">')
+        preserve_js_form = (f'<input type="hidden" name="start_geo" '
+                            f'value="{preserve_start[0]},{preserve_start[1]}">')
 
     html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
@@ -55,9 +56,10 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding
 .btn:disabled{{opacity:.5;cursor:default}}
 #msg{{font-size:11px;margin-top:5px;min-height:14px;color:#667}}
 </style></head><body>
-<form id="gf" method="GET" target="_top">
+<form id="gf" method="GET" target="_top" action="/">
   <input type="hidden" name="{field}_geo" id="coords">
-  {preserve_html}
+  <input type="hidden" name="_page" value="main_map">
+  {preserve_js_form}
 </form>
 <button class="btn" id="btn" onclick="getGeo()">📍 Mevcut Konumu Kullan</button>
 <div id="msg"></div>
@@ -65,24 +67,34 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding
 function getGeo(){{
   var btn=document.getElementById('btn'),msg=document.getElementById('msg');
   btn.disabled=true; msg.style.color='#888'; msg.textContent='⏳ Konum alınıyor...';
-  if(!navigator.geolocation){{
+
+  // Önce parent frame'in geolocation'ını dene (iframe izin kısıtını aşar)
+  var geo=null;
+  try{{
+    if(window.parent&&window.parent.navigator&&window.parent.navigator.geolocation)
+      geo=window.parent.navigator.geolocation;
+  }}catch(e){{}}
+  if(!geo) geo=navigator.geolocation;
+
+  if(!geo){{
     msg.style.color='#e53935'; msg.textContent='❌ Tarayıcınız konum desteklemiyor';
     btn.disabled=false; return;
   }}
-  navigator.geolocation.getCurrentPosition(
-    function(pos){{
-      var lat=pos.coords.latitude.toFixed(6), lon=pos.coords.longitude.toFixed(6);
-      msg.style.color='#4caf50'; msg.textContent='✅ '+lat+', '+lon;
-      document.getElementById('coords').value=lat+','+lon;
-      document.getElementById('gf').submit();
-    }},
-    function(err){{
-      var m={{1:'❌ Konum izni reddedildi',2:'❌ Sinyal alınamadı',3:'❌ Zaman aşımı'}};
-      msg.style.color='#e53935'; msg.textContent=m[err.code]||('❌ '+err.message);
-      btn.disabled=false;
-    }},
-    {{enableHighAccuracy:true,timeout:12000,maximumAge:0}}
-  );
+
+  function onSuccess(pos){{
+    var lat=pos.coords.latitude.toFixed(6), lon=pos.coords.longitude.toFixed(6);
+    msg.style.color='#4caf50'; msg.textContent='✅ '+lat+', '+lon;
+    document.getElementById('coords').value=lat+','+lon;
+    document.getElementById('gf').submit();
+  }}
+
+  function onError(err){{
+    var m={{1:'❌ Konum izni reddedildi — tarayıcı adres çubuğundaki kilit simgesine tıklayın',2:'❌ Konum sinyali alınamadı',3:'❌ Zaman aşımı — tekrar deneyin'}};
+    msg.style.color='#e53935'; msg.textContent=m[err.code]||('❌ '+err.message);
+    btn.disabled=false;
+  }}
+
+  geo.getCurrentPosition(onSuccess,onError,{{enableHighAccuracy:true,timeout:12000,maximumAge:0}});
 }}
 </script></body></html>"""
     components.html(html, height=62)
@@ -481,8 +493,14 @@ if _egeo:
     st.session_state.end_lon_live   = _egeo[1]
     st.session_state.end_place_name = f"📍 GPS ({_egeo[0]:.4f}, {_egeo[1]:.4f})"
 
+# _page param ile app_page'i koruyoruz (JS'den gelen)
+_page_from_url = st.query_params.get('_page', '')
+if _page_from_url == 'main_map':
+    st.session_state.app_page = 'main_map'
+
 if _sgeo or _egeo:
     st.query_params.clear()
+    st.rerun()
 
 
 
@@ -727,6 +745,7 @@ def create_folium_map(
 
     # ── Tekil rota modu ────────────────────────────────────────────────────
     if route_info is None:
+        _visible_pts = []
         for _lat, _lon, _col, _tip in [
             (start_lat_live, start_lon_live, '#2E7D32', 'Başlangıç Noktası'),
             (end_lat_live,   end_lon_live,   '#C62828', 'Bitiş Noktası'),
@@ -737,6 +756,21 @@ def create_folium_map(
                     tooltip=_tip, color='white', fill=True,
                     fillColor=_col, fillOpacity=1.0, weight=3,
                 ).add_to(m)
+                _visible_pts.append([_lat, _lon])
+        # GPS marker'larını da sayıyoruz
+        for _glat, _glon in [(start_geo_lat, start_geo_lon), (end_geo_lat, end_geo_lon)]:
+            if _glat is not None and [_glat, _glon] not in _visible_pts:
+                _visible_pts.append([_glat, _glon])
+        # Haritayı noktaya/noktalara göre ortala
+        if len(_visible_pts) == 1:
+            m.location = _visible_pts[0]
+            m.zoom_start = 15
+        elif len(_visible_pts) >= 2:
+            m.fit_bounds(
+                [[min(p[0] for p in _visible_pts), min(p[1] for p in _visible_pts)],
+                 [max(p[0] for p in _visible_pts), max(p[1] for p in _visible_pts)]],
+                padding=[60, 60]
+            )
     else:
         coords = route_info.get('coordinates', [])
         if coords:
@@ -1525,12 +1559,18 @@ elif st.session_state.app_page == 'map':
                 )
 
             # ── Harita ───────────────────────────────────────────────────────
+            _map_key = "map_{}_{}_{}_{}".format(
+                st.session_state.start_lat_live,
+                st.session_state.start_lon_live,
+                st.session_state.end_lat_live,
+                st.session_state.end_lon_live,
+            )
             map_data = st_folium(
                 folium_map,
                 use_container_width=True,
                 height=560,
                 returned_objects=["last_clicked"],
-                key="main_folium_map",
+                key=_map_key,
             )
 
             # ── Tıklama işle ──────────────────────────────────────────────────
