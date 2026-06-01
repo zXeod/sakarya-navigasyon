@@ -414,24 +414,43 @@ st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem !important; }
 
-    /* ── st_searchbox dark tema override ─────────────────────────────── */
-    [data-baseweb="input"] input,
+    /* ── st_searchbox dark tema — kapsamlı override ──────────────────── */
+
+    /* Tüm react-select container'ları */
+    [class*="react-select"][class*="container"],
+    [class*="react-select"][class*="control"],
+    [class*="react-select__control"],
     .react-select__control,
-    .react-select__control--is-focused {
+    .react-select__control--is-focused,
+    .react-select__control--menu-is-open {
         background-color: #1e2130 !important;
         border-color: #3a3d52 !important;
         color: #dde !important;
         box-shadow: none !important;
     }
-    .react-select__control--is-focused {
+    .react-select__control--is-focused,
+    .react-select__control--menu-is-open {
         border-color: #1565C0 !important;
         box-shadow: 0 0 0 1px #1565C055 !important;
     }
+
+    /* Input alanı ve değer */
+    .react-select__value-container,
+    .react-select__value-container--has-value {
+        background-color: #1e2130 !important;
+    }
     .react-select__single-value,
     .react-select__input-container,
-    .react-select__input { color: #dde !important; }
+    .react-select__input,
+    .react-select__input input {
+        color: #dde !important;
+        background-color: transparent !important;
+    }
     .react-select__placeholder { color: #4a4d62 !important; }
-    .react-select__menu {
+
+    /* Dropdown menü */
+    .react-select__menu,
+    .react-select__menu-list {
         background-color: #1a1d2e !important;
         border: 1px solid #3a3d52 !important;
         border-radius: 10px !important;
@@ -445,14 +464,35 @@ st.markdown("""
         background-color: #252840 !important;
         color: #fff !important;
     }
+
+    /* İkonlar ve ayraçlar */
     .react-select__indicator-separator { background-color: #3a3d52 !important; }
     .react-select__dropdown-indicator,
     .react-select__clear-indicator { color: #556 !important; }
     .react-select__dropdown-indicator:hover,
     .react-select__clear-indicator:hover { color: #99a !important; }
-    /* Searchbox wrapper arka planı */
-    div[data-testid="stHorizontalBlock"] > div > div > div > div[class*="searchbox"],
-    .stSearchbox > div { background: transparent !important; }
+
+    /* Streamlit searchbox wrapper'ı — beyaz arka planı sıfırla */
+    [data-testid="stSearchbox"] > div,
+    [data-testid="stSearchbox"] > div > div,
+    [data-testid="stSearchbox"] label + div,
+    .stSearchbox,
+    .stSearchbox > div,
+    div[class*="searchbox"] { background: transparent !important; }
+
+    /* stSearchbox içindeki tüm div arka planları */
+    [data-testid="stSearchbox"] div[class*="react-select"] {
+        background-color: #1e2130 !important;
+    }
+
+    /* Baseweb input override */
+    [data-baseweb="input"],
+    [data-baseweb="input"] > div,
+    [data-baseweb="input"] input {
+        background-color: #1e2130 !important;
+        border-color: #3a3d52 !important;
+        color: #dde !important;
+    }
 
     .loc-card {
         background: linear-gradient(135deg, #1a237e11, #1565C011);
