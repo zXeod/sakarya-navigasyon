@@ -2226,7 +2226,7 @@ elif st.session_state.app_page == 'map':
                                 })
 
                             _df_cmp = pd.DataFrame(_cmp_data)
-                            st.dataframe(_df_cmp, use_container_width=True,
+                            st.dataframe(_df_cmp, width='stretch',
                                          hide_index=True)
 
                             _best  = min(_costs_cmp, key=_costs_cmp.get)
