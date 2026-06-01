@@ -100,7 +100,7 @@ def geo_button_html(field: str, color: str,
                 r_lon = float(geo["lon"])
                 acc   = geo.get("acc", "?")
                 # Sakarya sınırı kontrolü
-                if not (40.15 <= r_lat <= 41.05 and 29.8 <= r_lon <= 31.3):
+                if not (40.15 <= r_lat <= 41.15 and 29.8 <= r_lon <= 31.3):
                     st.warning("⚠️ Konumunuz Sakarya il sınırları dışında.")
                     return
                 st.session_state[f"{field}_lat_live"]   = r_lat
@@ -156,7 +156,7 @@ def search_component_handler(field: str, color: str,
     r_lon = result.get("lon")
     if r_lat is None or r_lon is None:
         return
-    if not (40.15 <= r_lat <= 41.05 and 29.8 <= r_lon <= 31.3):
+    if not (40.15 <= r_lat <= 41.15 and 29.8 <= r_lon <= 31.3):
         st.warning("⚠️ Seçilen konum Sakarya sınırları dışında.")
         return
 
@@ -776,7 +776,7 @@ if _sres or _eres:
 # ── Sakarya koordinat doğrulama ───────────────────────────────────────────────
 def _is_sakarya(lat, lon) -> bool:
     return (lat is not None and lon is not None
-            and 40.15 <= lat <= 41.05 and 29.8 <= lon <= 31.3)
+            and 40.15 <= lat <= 41.15 and 29.8 <= lon <= 31.3)
 
 for _k_lat, _k_lon in [
     ('start_lat_live',  'start_lon_live'),
@@ -957,18 +957,30 @@ def create_folium_map(
                          f"{int(_ar['estimated_time_minutes'])} dk"),
             ).add_to(m)
             all_coords.extend(_c)
-        # Seçili rotayı üste çiz
-        _sel = alt_routes[sel_alt_idx]
-        _sc  = _sel.get('coordinates', [])
+        # Seçili rotayı üste çiz — trafik renkli
+        _sel  = alt_routes[sel_alt_idx]
+        _sc   = _sel.get('coordinates', [])
+        _segs = _sel.get('colored_segments', [])
         if _sc:
-            folium.PolyLine(
-                locations=_sc,
-                color=_sel.get('route_color', '#1565C0'),
-                weight=6, opacity=0.94,
-                tooltip=(f"{_sel.get('route_label','Rota')} | "
-                         f"{_sel['total_distance_m']/1000:.1f} km | "
-                         f"{int(_sel['estimated_time_minutes'])} dk"),
-            ).add_to(m)
+            if _segs:
+                for _sg in _segs:
+                    if len(_sg['coords']) >= 2:
+                        folium.PolyLine(
+                            locations=_sg['coords'],
+                            color=_sg['color'],
+                            weight=7, opacity=0.94,
+                            tooltip=(f"{_sel.get('route_label','Rota')} | "
+                                     f"~{_sg['speed']:.0f} km/h"),
+                        ).add_to(m)
+            else:
+                folium.PolyLine(
+                    locations=_sc,
+                    color=_sel.get('route_color', '#1565C0'),
+                    weight=6, opacity=0.94,
+                    tooltip=(f"{_sel.get('route_label','Rota')} | "
+                             f"{_sel['total_distance_m']/1000:.1f} km | "
+                             f"{int(_sel['estimated_time_minutes'])} dk"),
+                ).add_to(m)
             all_coords.extend(_sc)
 
         # Başlangıç / bitiş marker'ları
@@ -1026,12 +1038,24 @@ def create_folium_map(
             )
     else:
         coords = route_info.get('coordinates', [])
+        segs   = route_info.get('colored_segments', [])
         if coords:
-            folium.PolyLine(
-                locations=coords, color='#1565C0',
-                weight=6, opacity=0.92,
-                popup=f"📏 {route_info['total_distance_m']/1000:.2f} km",
-            ).add_to(m)
+            if segs:
+                # Trafik yoğunluğuna göre renkli segmentler
+                for seg in segs:
+                    if len(seg['coords']) >= 2:
+                        folium.PolyLine(
+                            locations=seg['coords'],
+                            color=seg['color'],
+                            weight=7, opacity=0.92,
+                            tooltip=f"~{seg['speed']:.0f} km/h",
+                        ).add_to(m)
+            else:
+                # Fallback: tek renk
+                folium.PolyLine(
+                    locations=coords, color='#1565C0',
+                    weight=6, opacity=0.92,
+                ).add_to(m)
             m.fit_bounds(
                 [[min(c[0] for c in coords), min(c[1] for c in coords)],
                  [max(c[0] for c in coords), max(c[1] for c in coords)]],
@@ -1047,6 +1071,24 @@ def create_folium_map(
                 color='white', fill=True,
                 fillColor=_col, fillOpacity=1.0, weight=3,
             ).add_to(m)
+        # Trafik renk açıklaması
+        if segs:
+            _tf = route_info.get('traffic_factor', 1.0)
+            _legend = (
+                "<div style='position:fixed;bottom:30px;left:10px;z-index:9999;"
+                "background:rgba(20,22,35,.88);border:1px solid #3a3d52;"
+                "border-radius:8px;padding:8px 12px;font-size:12px;color:#ccd;"
+                "box-shadow:0 2px 8px rgba(0,0,0,.4)'>"
+                "<b style='font-size:11px;letter-spacing:.5px'>🚦 TRAFİK YOĞUNLUĞU</b><br>"
+                "<span style='color:#27ae60'>━━</span> &gt;80 km/h &nbsp;"
+                "<span style='color:#f9ca24'>━━</span> 60–80 &nbsp;"
+                "<span style='color:#e67e22'>━━</span> 40–60<br>"
+                "<span style='color:#e74c3c'>━━</span> 20–40 km/h &nbsp;"
+                "<span style='color:#c0392b'>━━</span> &lt;20 km/h"
+                f"<br><span style='color:#778;font-size:10px'>Trafik ×{_tf:.1f}</span>"
+                "</div>"
+            )
+            m.get_root().html.add_child(folium.Element(_legend))
     return m
 
 
@@ -1281,7 +1323,7 @@ def _photon_wrapper_end(query: str, **_):
 def calculate_route(start_lat, start_lon, end_lat, end_lon, vehicle_type, hour,
                     with_alternatives: bool = True):
     """Rota hesapla (+ alternatifler), session_state'e kaydet."""
-    SLAT, SLON = (40.15, 41.05), (29.8, 31.3)
+    SLAT, SLON = (40.15, 41.15), (29.8, 31.3)
     for lbl, la, lo in [("Başlangıç", start_lat, start_lon),
                          ("Bitiş",     end_lat,   end_lon)]:
         if not (SLAT[0] <= la <= SLAT[1] and SLON[0] <= lo <= SLON[1]):
@@ -1677,7 +1719,7 @@ elif st.session_state.app_page == 'map':
         # ── Saat seçimi ───────────────────────────────────────────────────────
         st.subheader("🕐 Seyahat Saati")
         # key="hour" → Streamlit otomatik session_state.hour'a bağlar (persist)
-        hour = st.slider("Saat (Trafik Tahmini)", 0, 23, key="hour", format="%d:00")
+        hour = int(st.slider("Saat (Trafik Tahmini)", 0, 23, key="hour", format="%d:00"))
 
         _TRAFFIC: List[tuple] = [
             ((0,  4), "🌙 Gece — Yollar boş"),

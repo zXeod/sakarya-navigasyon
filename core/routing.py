@@ -252,7 +252,8 @@ class SmartRouter:
             'vehicle_type': self.vehicle_type,
             'hour': self.hour,
             'traffic_factor': self.traffic_factor,
-            'surfaces': route_surfaces,  # Yol yüzeyleri
+            'surfaces': route_surfaces,
+            'colored_segments': self.get_colored_segments(route_nodes),
         }
     
     def _calculate_route_distance(self, route_nodes: List[int]) -> float:
@@ -344,41 +345,90 @@ class SmartRouter:
 
         return coords
 
+    def _edge_speed_kmh(self, highway: str, length_m: float) -> float:
+        """
+        Kenar için trafik faktörü ile interpolasyonlu anlık hız hesapla.
+        traffic_factor: 0.7=gece boş, 1.0=normal, 1.8=yoğun akşam
+        """
+        if self.vehicle_type == 'bisiklet':
+            return 16.0
+
+        factor = VEHICLE_SPEED_FACTORS.get(self.vehicle_type, 1.0)
+        speeds = HIGHWAY_SPEEDS.get(highway, (45, 35))
+        off_peak, rush = speeds[0], speeds[1]
+
+        # traffic_factor'ü [0.8, 1.8] arasında [off_peak, rush] hızına lineer eşle
+        tf = self.traffic_factor
+        t  = min(max((tf - 0.8) / 1.0, 0.0), 1.0)  # 0=gece boş, 1=yoğun trafik
+        speed_kmh = (off_peak * (1.0 - t) + rush * t) * factor
+
+        if self.vehicle_type == 'kamyon' and highway in ('motorway', 'trunk'):
+            speed_kmh = min(speed_kmh, 90.0)
+
+        return max(speed_kmh, 5.0)
+
     def _calculate_route_time(self, route_nodes: List[int]) -> float:
         """
         Rota seyahat süresini dakika cinsinden hesapla.
-        Her kenar için yol tipine ve saate göre gerçekçi hız kullanır.
+        traffic_factor ile yol tipine özgü anlık hız kullanır.
         """
         total_seconds = 0.0
-        factor = VEHICLE_SPEED_FACTORS.get(self.vehicle_type, 1.0)
-
         for u, v in zip(route_nodes[:-1], route_nodes[1:]):
             if v not in self.graph[u]:
                 continue
             best_key = min(self.graph[u][v],
                            key=lambda k: self.graph[u][v][k].get('length', float('inf')))
             edge_data = self.graph.edges[u, v, best_key]
-            length_m = edge_data.get('length', 50)
-
-            highway = edge_data.get('highway', 'unclassified')
+            length_m  = edge_data.get('length', 50)
+            highway   = edge_data.get('highway', 'unclassified')
             if isinstance(highway, list):
                 highway = highway[0]
-
-            speeds = HIGHWAY_SPEEDS.get(highway, (45, 35))
-            speed_kmh = (speeds[1] if self.is_rush_hour else speeds[0]) * factor
-            speed_kmh = max(speed_kmh, 5.0)  # minimum 5 km/h
-
-            # Kamyon için otoban hız sınırı: 90 km/h
-            if self.vehicle_type == 'kamyon' and highway in ('motorway', 'trunk'):
-                speed_kmh = min(speed_kmh, 90.0)
-
-            # Bisiklet için sabit hız
-            if self.vehicle_type == 'bisiklet':
-                speed_kmh = 16.0
-
+            speed_kmh = self._edge_speed_kmh(highway, length_m)
             total_seconds += (length_m / 1000) / speed_kmh * 3600
+        return total_seconds / 60
 
-        return total_seconds / 60  # dakika
+    def get_colored_segments(self, route_nodes: List[int]) -> List[Dict]:
+        """
+        Rota üzerindeki her segmentin gerçek geometrisini ve
+        anlık hıza göre trafik rengini döndür.
+        Renk skalası: yeşil (hızlı) → sarı → turuncu → kırmızı (yavaş/tıkalı)
+        """
+        _SPEED_COLORS = [
+            (80, '#27ae60'),  # yeşil  — akıcı
+            (60, '#f9ca24'),  # sarı   — orta
+            (40, '#e67e22'),  # turuncu — yavaşlıyor
+            (20, '#e74c3c'),  # kırmızı-turuncu — tıkalı
+            ( 0, '#c0392b'),  # koyu kırmızı — dur-kalk
+        ]
+
+        segments: List[Dict] = []
+        for u, v in zip(route_nodes[:-1], route_nodes[1:]):
+            if v not in self.graph[u]:
+                continue
+            best_key = min(self.graph[u][v],
+                           key=lambda k: self.graph[u][v][k].get('length', float('inf')))
+            edata   = self.graph.edges[u, v, best_key]
+            highway = edata.get('highway', 'unclassified')
+            if isinstance(highway, list):
+                highway = highway[0]
+            speed = self._edge_speed_kmh(highway, edata.get('length', 50))
+
+            color = _SPEED_COLORS[-1][1]
+            for threshold, col in _SPEED_COLORS:
+                if speed >= threshold:
+                    color = col
+                    break
+
+            # Gerçek geometri
+            if 'geometry' in edata:
+                coords = [(lat, lon) for lon, lat in edata['geometry'].coords]
+            else:
+                n1 = self.graph.nodes[u]
+                n2 = self.graph.nodes[v]
+                coords = [(n1['y'], n1['x']), (n2['y'], n2['x'])]
+
+            segments.append({'coords': coords, 'color': color, 'speed': round(speed, 1)})
+        return segments
     
     # Yol konfor faktörleri — "En Kolay" stratejisi için
     _ROAD_EASE: Dict[str, float] = {
@@ -508,6 +558,7 @@ class SmartRouter:
                     'hour':                 self.hour,
                     'traffic_factor':       self.traffic_factor,
                     'surfaces':             surfaces,
+                    'colored_segments':     self.get_colored_segments(nodes),
                     'route_label':          label,
                     'route_color':          color,
                     'route_strategy':       strategy,
